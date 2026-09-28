@@ -1,8 +1,6 @@
 "use client";
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import {
@@ -142,8 +140,6 @@ export default function NotesPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-[#0A1118]">
-      <Navbar />
-      
       <main className="flex-grow pt-0 pb-20">
         
         {/* 1. HERO SECTION */}
@@ -876,7 +872,6 @@ export default function NotesPage() {
         </DialogContent>
       </Dialog>
 
-      <Footer />
     </div>
   );
 }

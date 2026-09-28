@@ -1,5 +1,6 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from rest_framework.test import APIClient
 from rest_framework import status
 from django.urls import reverse
@@ -13,6 +14,8 @@ class ExamAnalyticsTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.admin_user = User.objects.create_superuser(username='admin', password='password', email='admin@test.com')
+        self.admin_user.role = 'admin'
+        self.admin_user.save(update_fields=['role'])
         self.student_user = User.objects.create_user(username='student1', password='password', email='s1@test.com')
         self.student_user2 = User.objects.create_user(username='student2', password='password', email='s2@test.com')
         
@@ -86,6 +89,25 @@ class ExamAnalyticsTestCase(TestCase):
         url = reverse('admin-examination-analytics', kwargs={'pk': self.exam.id})
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_exams_overview_counts_examinations_not_taxonomy(self):
+        self.parent_exam.status = 'inactive'
+        self.parent_exam.save()
+        Examination.objects.create(
+            title='Published Exam',
+            category=self.category,
+            exam=self.parent_exam,
+            status='published',
+            created_by=self.admin_user,
+        )
+
+        cache.delete('admin:exams:overview')
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.get(reverse('admin-exams-overview'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['totalExams'], 2)
+        self.assertEqual(response.data['activeExams'], 1)
 
     def test_advanced_analytics_and_question_performance(self):
         # Create questions

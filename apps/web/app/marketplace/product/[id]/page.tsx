@@ -2,8 +2,6 @@
 
 import React, { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { Button } from "@/components/ui/button";
 import { marketplaceApi, Product } from "@/lib/api/marketplace";
 import { ArrowLeft, Loader2, ShoppingCart, Tag, MapPin, User, BookOpen } from "lucide-react";
@@ -54,9 +52,7 @@ export default function ProductDetailPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-[#0A1118] flex items-center justify-center flex-col">
-        <Navbar />
         <Loader2 className="w-10 h-10 animate-spin text-[#163E6B]" />
-        <Footer />
       </div>
     );
   }
@@ -64,12 +60,10 @@ export default function ProductDetailPage() {
   if (error || !product) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-[#0A1118] flex flex-col font-sans">
-        <Navbar />
         <main className="flex-1 container mx-auto px-4 py-32 text-center">
           <h1 className="text-2xl font-bold text-red-500 mb-4">{error || "Product not found"}</h1>
           <Button onClick={() => router.push("/marketplace")}>Back to Marketplace</Button>
         </main>
-        <Footer />
       </div>
     );
   }
@@ -79,7 +73,6 @@ export default function ProductDetailPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#0A1118] text-slate-900 dark:text-slate-50 flex flex-col font-sans">
-      <Navbar />
       <main className="flex-1 container mx-auto px-4 py-24 max-w-5xl">
         <button 
           onClick={() => router.push("/marketplace")}
@@ -153,7 +146,6 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </main>
-      <Footer />
     </div>
   );
 }

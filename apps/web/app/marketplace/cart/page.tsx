@@ -2,8 +2,6 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { Button } from "@/components/ui/button";
 import { marketplaceApi, Cart } from "@/lib/api/marketplace";
 import { ArrowRight, Loader2, Minus, Plus, ShoppingBag, Trash2 } from "lucide-react";
@@ -58,9 +56,7 @@ export default function CartPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-[#0A1118] flex items-center justify-center flex-col">
-        <Navbar />
         <Loader2 className="w-10 h-10 animate-spin text-[#163E6B]" />
-        <Footer />
       </div>
     );
   }
@@ -73,7 +69,6 @@ export default function CartPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#0A1118] text-slate-900 dark:text-slate-50 flex flex-col font-sans">
-      <Navbar />
       <main className="flex-1 container mx-auto px-4 py-24 max-w-5xl">
         <h1 className="text-3xl font-extrabold mb-8 flex items-center gap-3">
           <ShoppingBag className="w-8 h-8 text-[#163E6B] dark:text-[#D4A72C]" /> Your Cart
@@ -165,7 +160,6 @@ export default function CartPage() {
           </div>
         )}
       </main>
-      <Footer />
     </div>
   );
 }

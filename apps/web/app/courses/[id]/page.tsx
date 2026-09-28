@@ -7,8 +7,6 @@ import { Button } from "@/components/ui/button";
 import { RetryImage } from "@/components/ui/retry-image";
 import Link from "next/link";
 import { courseEnrollmentApi } from "@/lib/api/enrollment";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 
@@ -79,7 +77,6 @@ export default function PublicCourseDetail() {
   if (isLoading) {
     return (
       <>
-        <Navbar />
         <main className="flex-1 bg-slate-50 dark:bg-[#040B14] min-h-screen pt-[80px]">
           <div className="p-4 lg:p-8 max-w-5xl mx-auto space-y-8 animate-pulse pt-16">
             <div className="h-64 bg-slate-200 dark:bg-white/5 rounded-[24px]"></div>
@@ -88,7 +85,6 @@ export default function PublicCourseDetail() {
             </div>
           </div>
         </main>
-        <Footer />
       </>
     );
   }
@@ -96,7 +92,6 @@ export default function PublicCourseDetail() {
   if (error || !course) {
     return (
       <>
-        <Navbar />
         <main className="flex-1 bg-slate-50 dark:bg-[#040B14] min-h-screen pt-[80px]">
           <div className="p-8 text-center flex flex-col items-center justify-center min-h-[60vh]">
             <Trophy className="w-16 h-16 text-red-200 mb-4" />
@@ -107,14 +102,12 @@ export default function PublicCourseDetail() {
             </Button>
           </div>
         </main>
-        <Footer />
       </>
     );
   }
 
   return (
     <>
-      <Navbar />
       <main className="flex-1 bg-slate-50 dark:bg-[#040B14] min-h-screen pt-[80px]">
         <div className="p-4 lg:p-8 max-w-6xl mx-auto space-y-8 pb-20">
           <Button 
@@ -299,7 +292,6 @@ export default function PublicCourseDetail() {
           </div>
         </div>
       </main>
-      <Footer />
     </>
   );
 }

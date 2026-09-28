@@ -5,8 +5,6 @@ import Link from "next/link";
 import { BookOpen, Target, ArrowRight, Search, SlidersHorizontal, Sparkles, ChevronDown, CheckCircle2, BookMarked } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { Badge } from "@/components/ui/badge";
 import { LoksewaBadgeIcon } from "@/components/ui/loksewa-badge-icon";
 import Image from "next/image";
@@ -51,7 +49,6 @@ export default function CoursesPage() {
 
   return (
     <>
-      <Navbar />
       <main className="flex-1 bg-slate-50 dark:bg-[#040B14] min-h-screen pt-[80px]">
         
         {/* 1. PREMIUM HERO SECTION */}
@@ -425,7 +422,6 @@ export default function CoursesPage() {
           </div>
         </section>
       </main>
-      <Footer />
     </>
   );
 }

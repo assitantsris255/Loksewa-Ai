@@ -2,8 +2,6 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -44,8 +42,6 @@ export default function ExamsPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-[#0A1118]">
-      <Navbar />
-
       {/* 1. HERO SECTION */}
       <section className="relative pt-32 pb-20 md:pt-40 md:pb-24 overflow-hidden">
         {/* Subtle premium background visual */}
@@ -712,7 +708,6 @@ export default function ExamsPage() {
         </div>
       </section>
 
-      <Footer />
     </div>
   );
 }

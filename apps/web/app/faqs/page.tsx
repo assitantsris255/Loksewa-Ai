@@ -1,6 +1,4 @@
 import { Metadata } from "next";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { FaqsContent } from "./FaqsContent";
 
 export const metadata: Metadata = {
@@ -12,11 +10,9 @@ export const metadata: Metadata = {
 export default function FaqsPage() {
   return (
     <>
-      <Navbar />
       <main className="flex-1 min-h-screen pt-[72px] sm:pt-[80px]">
         <FaqsContent />
       </main>
-      <Footer />
     </>
   );
 }

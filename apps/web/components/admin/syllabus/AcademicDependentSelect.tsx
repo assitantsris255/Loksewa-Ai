@@ -43,6 +43,16 @@ export function AcademicDependentSelect({
   const show = (lvl: string) => levels.indexOf(lvl) <= maxIdx;
   const isRequired = (lvl: 'category' | 'position' | 'subject' | 'chapter' | 'topic') =>
     requiredLevels.includes(lvl);
+  const hasOption = (options: any[], value?: number | string | null) =>
+    value != null && options.some(option => String(option.id) === String(value));
+  const pendingValue = (options: any[], value: number | string | null | undefined) =>
+    value != null && !hasOption(options, value) ? String(value) : undefined;
+
+  const pendingCategory = pendingValue(categories, category);
+  const pendingPosition = pendingValue(positions, position);
+  const pendingSubject = pendingValue(subjects, subject);
+  const pendingChapter = pendingValue(chapters, chapter);
+  const pendingTopic = pendingValue(topics, topic);
 
   // 1. Load full academic hierarchy tree in ONE fast cached request
   useEffect(() => {
@@ -65,7 +75,7 @@ export function AcademicDependentSelect({
       })
       .catch((err) => {
         console.error('Failed to load academic tree, falling back to individual calls:', err);
-        adminSyllabusApi.getCategories()
+        return adminSyllabusApi.getCategories()
           .then((res: any) => {
             if (isMounted) setCategories(Array.isArray(res) ? res : (res?.results || []));
           })
@@ -274,15 +284,16 @@ export function AcademicDependentSelect({
             {labels.category || 'Category'} {isRequired('category') && <span className="text-red-500">*</span>}
           </label>
           <select
-            value={category || ''}
+            value={category == null ? '' : String(category)}
             onChange={e => handleChange('category', e.target.value)}
             className={`w-full p-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0B2545]/20 ${errors.category ? 'border-red-500' : 'border-gray-200'}`}
           >
+            {pendingCategory != null && <option value={pendingCategory} disabled>{loading.tree || loading.category ? `Loading selected category (#${category})...` : `Selected category unavailable (#${category})`}</option>}
             <option value="">
               {loading.category ? 'Loading categories...' : 'Select Category'}
             </option>
             {categories.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={String(c.id)}>{c.name}</option>
             ))}
           </select>
           {loading.category && <p className="text-xs text-gray-400 mt-1">Loading categories...</p>}
@@ -297,14 +308,12 @@ export function AcademicDependentSelect({
             {labels.position || 'Position / Level'} {isRequired('position') && <span className="text-red-500">*</span>}
           </label>
           <select
-            value={position || ''}
-            onChange={e => {
-              handleChange('exam', e.target.value);
-              handleChange('position', e.target.value);
-            }}
+            value={position == null ? '' : String(position)}
+            onChange={e => handleChange('position', e.target.value)}
             disabled={!category || loading.position}
             className={`w-full p-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0B2545]/20 ${errors.exam || errors.position ? 'border-red-500' : 'border-gray-200'} ${!category ? 'bg-gray-50 text-gray-400' : ''}`}
           >
+            {pendingPosition != null && <option value={pendingPosition} disabled>{loading.tree || loading.position ? `Loading selected position (#${position})...` : `Selected position unavailable (#${position})`}</option>}
             <option value="">
               {!category
                 ? 'Select Category first'
@@ -316,13 +325,13 @@ export function AcademicDependentSelect({
             {positions.filter(p => !p.parent).map(level => {
               const children = positions.filter(p => p.parent === level.id);
               if (children.length === 0) {
-                return <option key={level.id} value={level.id}>{level.name}</option>;
+                return <option key={level.id} value={String(level.id)}>{level.name}</option>;
               }
               return (
                 <optgroup key={level.id} label={level.name}>
-                  <option value={level.id}>{level.name} (General)</option>
+                  <option value={String(level.id)}>{level.name} (General)</option>
                   {children.map(child => (
-                    <option key={child.id} value={child.id}>{child.name}</option>
+                    <option key={child.id} value={String(child.id)}>{child.name}</option>
                   ))}
                 </optgroup>
               );
@@ -345,11 +354,12 @@ export function AcademicDependentSelect({
             )}
           </label>
           <select
-            value={subject || ''}
+            value={subject == null ? '' : String(subject)}
             onChange={e => handleChange('subject', e.target.value)}
             disabled={!position || loading.subject}
             className={`w-full p-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0B2545]/20 ${errors.subject ? 'border-red-500' : 'border-gray-200'} ${!position ? 'bg-gray-50 text-gray-400' : ''}`}
           >
+            {pendingSubject != null && <option value={pendingSubject} disabled>{loading.tree || loading.subject ? `Loading selected subject (#${subject})...` : `Selected subject unavailable (#${subject})`}</option>}
             <option value="">
               {!position
                 ? 'Select Position first'
@@ -362,7 +372,7 @@ export function AcademicDependentSelect({
                 : 'Select Subject (Optional)'}
             </option>
             {subjects.map(s => (
-              <option key={s.id} value={s.id}>{s.name}</option>
+              <option key={s.id} value={String(s.id)}>{s.name}</option>
             ))}
           </select>
           {loading.subject && <p className="text-xs text-gray-400 mt-1">Loading subjects...</p>}
@@ -382,14 +392,12 @@ export function AcademicDependentSelect({
             )}
           </label>
           <select
-            value={chapter || ''}
-            onChange={e => {
-              handleChange('unit', e.target.value);
-              handleChange('chapter', e.target.value);
-            }}
+            value={chapter == null ? '' : String(chapter)}
+            onChange={e => handleChange('chapter', e.target.value)}
             disabled={(!subject && isRequired('subject')) || loading.chapter || !position}
             className={`w-full p-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0B2545]/20 ${errors.unit || errors.chapter ? 'border-red-500' : 'border-gray-200'} ${(!subject && isRequired('subject')) || !position ? 'bg-gray-50 text-gray-400' : ''}`}
           >
+            {pendingChapter != null && <option value={pendingChapter} disabled>{loading.tree || loading.chapter ? `Loading selected chapter (#${chapter})...` : `Selected chapter unavailable (#${chapter})`}</option>}
             <option value="">
               {!position
                 ? 'Select Position first'
@@ -404,7 +412,7 @@ export function AcademicDependentSelect({
                 : 'Select Chapter (Optional)'}
             </option>
             {chapters.map(c => (
-              <option key={c.id} value={c.id}>{c.title || c.name}</option>
+              <option key={c.id} value={String(c.id)}>{c.title || c.name}</option>
             ))}
           </select>
           {loading.chapter && <p className="text-xs text-gray-400 mt-1">Loading chapters...</p>}
@@ -424,11 +432,12 @@ export function AcademicDependentSelect({
             )}
           </label>
           <select
-            value={topic || ''}
+            value={topic == null ? '' : String(topic)}
             onChange={e => handleChange('topic', e.target.value)}
             disabled={!chapter || loading.topic}
             className={`w-full p-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0B2545]/20 ${errors.topic ? 'border-red-500' : 'border-gray-200'} ${!chapter ? 'bg-gray-50 text-gray-400' : ''}`}
           >
+            {pendingTopic != null && <option value={pendingTopic} disabled>{loading.tree || loading.topic ? `Loading selected topic (#${topic})...` : `Selected topic unavailable (#${topic})`}</option>}
             <option value="">
               {!chapter
                 ? 'Select Chapter first'
@@ -441,7 +450,7 @@ export function AcademicDependentSelect({
                 : 'Select Topic (Optional)'}
             </option>
             {topics.map(t => (
-              <option key={t.id} value={t.id}>{t.name}</option>
+              <option key={t.id} value={String(t.id)}>{t.name}</option>
             ))}
           </select>
           {loading.topic && <p className="text-xs text-gray-400 mt-1">Loading topics...</p>}

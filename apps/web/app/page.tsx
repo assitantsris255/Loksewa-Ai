@@ -1,5 +1,3 @@
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { LoksewaExamCountdown } from "@/components/student/countdown/LoksewaExamCountdown";
 
 // Public API Adapter
@@ -53,8 +51,6 @@ export default async function Home() {
     // The site-wide theme toggle (next-themes) controls the dark mode via the <html> tag.
     // We remove the hardcoded `dark` class so the toggle button actually works.
     <div className="w-full flex flex-col min-h-screen">
-      <Navbar />
-
       <main className="flex-1 bg-slate-50 dark:bg-[#020611] bg-aurora min-h-screen">
         <HeroSection />
         <section className="py-10 bg-white dark:bg-[#020611] relative">
@@ -79,8 +75,6 @@ export default async function Home() {
         <TeacherSection />
         <FinalCTASection />
       </main>
-
-      <Footer />
     </div>
   );
 }

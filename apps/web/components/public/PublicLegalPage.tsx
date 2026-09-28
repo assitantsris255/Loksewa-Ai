@@ -2,8 +2,6 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Loader2, AlertCircle, FileQuestion, RefreshCw } from "lucide-react";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { Button } from "@/components/ui/button";
 import { getPublicWebsitePage, type WebsitePageResult } from "@/lib/api/website-pages";
 import { LegalContent } from "./LegalContent";
@@ -29,7 +27,6 @@ export function PublicLegalPage({ slug }: { slug: string }) {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-[#0A1118]">
-      <Navbar />
       <main className="flex-grow pt-32 pb-24">
         <div className="container mx-auto px-4 max-w-[760px]">
           {result === null && (
@@ -73,7 +70,6 @@ export function PublicLegalPage({ slug }: { slug: string }) {
           )}
         </div>
       </main>
-      <Footer />
     </div>
   );
 }

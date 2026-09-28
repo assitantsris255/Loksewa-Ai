@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   BookOpen, Menu, X, Moon, Sun, ArrowRight,
-  Home, Target, FileText, Sparkles, ShoppingBag,
+  Home, Target, FileText, Sparkles, ShoppingBag, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "next-themes";
@@ -15,8 +15,38 @@ export function Navbar() {
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
   const [isScrolled, setIsScrolled] = React.useState(false);
+  const [pendingHref, setPendingHref] = React.useState<string | null>(null);
+  const pendingHrefRef = React.useRef<string | null>(null);
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = React.useState(false);
+
+  const handleNavigation = (
+    event: React.MouseEvent<HTMLAnchorElement>,
+    href: string
+  ) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey ||
+      event.currentTarget.target === "_blank"
+    ) return;
+
+    if (href === pathname && pendingHrefRef.current === null) {
+      setIsMobileMenuOpen(false);
+      return;
+    }
+
+    if (pendingHrefRef.current === href) {
+      event.preventDefault();
+      return;
+    }
+
+    pendingHrefRef.current = href;
+    setPendingHref(href);
+  };
 
   React.useEffect(() => {
     setMounted(true);
@@ -29,6 +59,21 @@ export function Navbar() {
   React.useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [pathname]);
+
+  React.useEffect(() => {
+    if (pendingHref !== pathname) return;
+    pendingHrefRef.current = null;
+    setPendingHref(null);
+  }, [pathname, pendingHref]);
+
+  React.useEffect(() => {
+    const clearPendingNavigation = () => {
+      pendingHrefRef.current = null;
+      setPendingHref(null);
+    };
+    window.addEventListener("popstate", clearPendingNavigation);
+    return () => window.removeEventListener("popstate", clearPendingNavigation);
+  }, []);
 
   const navLinks = [
     { href: "/", label: "Home" },
@@ -65,7 +110,7 @@ export function Navbar() {
           >
 
             {/* ── Brand ────────────────────────────── */}
-            <Link href="/" className="flex items-center gap-2.5 group shrink-0 pl-1">
+            <Link href="/" onClick={(event) => handleNavigation(event, "/")} className="flex items-center gap-2.5 group shrink-0 pl-1">
               <div className="p-1.5 rounded-[9px] bg-gradient-to-br from-[#163E6B] to-[#0B2545] shadow-[0_2px_10px_rgba(11,37,69,0.25)] transition-transform duration-300 group-hover:scale-105 group-hover:rotate-[-3deg]">
                 <BookOpen className="h-5 w-5 text-[#D4A72C]" strokeWidth={2.5} />
               </div>
@@ -78,28 +123,34 @@ export function Navbar() {
             <nav className="hidden lg:flex items-center gap-0.5 bg-slate-900/[0.04] dark:bg-white/[0.05] rounded-full p-1">
               {navLinks.map((link) => {
                 const isActive = pathname === link.href;
+                const isPending = pendingHref === link.href;
                 return (
                   <Link
                     key={link.href}
                     href={link.href}
-                    className="relative px-3.5 py-1.5 rounded-full text-[13px] font-[600] tracking-wide"
+                    onClick={(event) => handleNavigation(event, link.href)}
+                    aria-current={isActive ? "page" : undefined}
+                    aria-busy={isPending || undefined}
+                    className={`relative px-3.5 py-1.5 rounded-full text-[13px] font-[600] tracking-wide cursor-pointer ${isPending ? "bg-white/60 dark:bg-white/10" : ""}`}
                   >
-                    {isActive && (
+                    {(isActive || isPending) && (
                       <motion.span
                         layoutId="nav-active-pill"
-                        className="absolute inset-0 rounded-full bg-white dark:bg-white/10 shadow-[0_2px_10px_rgba(11,37,69,0.1)]"
+                        className={`absolute inset-0 rounded-full shadow-[0_2px_10px_rgba(11,37,69,0.1)] ${isPending ? "bg-white/70 dark:bg-white/10" : "bg-white dark:bg-white/10"}`}
                         transition={{ type: "spring", stiffness: 420, damping: 34 }}
                       />
                     )}
                     <span
-                      className={`relative z-10 transition-colors duration-200 ${
-                        isActive
+                      className={`relative z-10 flex items-center gap-1.5 transition-colors duration-200 ${
+                        isActive || isPending
                           ? "text-slate-900 dark:text-white"
                           : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
                       }`}
                     >
                       {link.label}
+                      {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin text-[#C29322]" aria-hidden="true" />}
                     </span>
+                    {isPending && <span className="sr-only" role="status">Opening {link.label}</span>}
                   </Link>
                 );
               })}
@@ -126,13 +177,14 @@ export function Navbar() {
                   separate public Teacher/Admin portal link. */}
               <Link
                 href="/login"
+                onClick={(event) => handleNavigation(event, "/login")}
                 className="text-[13px] font-[600] text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors px-1.5"
               >
                 Log In
               </Link>
 
               {/* Get Started */}
-              <Link href="/register">
+              <Link href="/register" onClick={(event) => handleNavigation(event, "/register")}>
                 <Button className="btn-gold-gradient text-[#040B14] h-[36px] px-4.5 rounded-full font-[700] text-[13px] border-none flex items-center gap-1.5 group">
                   Get Started
                   <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
@@ -144,6 +196,7 @@ export function Navbar() {
             <div className="flex lg:hidden items-center gap-1 pr-0.5">
               <Link
                 href="/login"
+                onClick={(event) => handleNavigation(event, "/login")}
                 className="mr-0.5 px-3 py-1.5 rounded-full text-[12px] font-[700] text-slate-700 dark:text-white border border-slate-200/80 dark:border-white/15 hover:bg-slate-900/[0.05] dark:hover:bg-white/8 transition-all"
               >
                 Login
@@ -175,19 +228,26 @@ export function Navbar() {
               <nav className="flex flex-col p-3 gap-1">
                 {navLinks.map((link) => {
                   const isActive = pathname === link.href;
+                  const isPending = pendingHref === link.href;
                   return (
                     <Link
                       key={link.href}
                       href={link.href}
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className={`flex items-center text-[15px] font-[600] px-4 py-3 rounded-[14px] transition-all ${
-                        isActive
+                      onClick={(event) => handleNavigation(event, link.href)}
+                      aria-current={isActive ? "page" : undefined}
+                      aria-busy={isPending || undefined}
+                      className={`flex items-center justify-between text-[15px] font-[600] px-4 py-3 rounded-[14px] transition-all cursor-pointer ${
+                        isActive || isPending
                           ? "bg-slate-100 dark:bg-white/8 text-slate-900 dark:text-white"
                           : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                       }`}
                     >
-                      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[#D4A72C] mr-3 shrink-0" />}
-                      {link.label}
+                      <span className="flex items-center">
+                        {(isActive || isPending) && <span className="w-1.5 h-1.5 rounded-full bg-[#D4A72C] mr-3 shrink-0" />}
+                        {link.label}
+                      </span>
+                      {isPending && <Loader2 className="h-4 w-4 animate-spin text-[#C29322]" aria-hidden="true" />}
+                      {isPending && <span className="sr-only" role="status">Opening {link.label}</span>}
                     </Link>
                   );
                 })}
@@ -199,12 +259,12 @@ export function Navbar() {
                 {/* Single unified Login entry - role-based redirect happens after
                     authentication (see app/login/page.tsx). */}
                 <div className="flex gap-2">
-                  <Link href="/login" onClick={() => setIsMobileMenuOpen(false)} className="flex-1">
+                  <Link href="/login" onClick={(event) => handleNavigation(event, "/login")} className="flex-1">
                     <Button variant="outline" className="w-full h-[44px] text-[14px] font-[600] border-slate-200 dark:border-white/10 text-slate-700 dark:text-white rounded-[14px] bg-transparent">
                       Log In
                     </Button>
                   </Link>
-                  <Link href="/register" onClick={() => setIsMobileMenuOpen(false)} className="flex-1">
+                  <Link href="/register" onClick={(event) => handleNavigation(event, "/register")} className="flex-1">
                     <Button className="btn-gold-gradient w-full h-[44px] text-[14px] font-[700] text-[#040B14] rounded-[14px] border-none">
                       Get Started
                     </Button>
@@ -224,33 +284,42 @@ export function Navbar() {
         <div className="grid grid-cols-5 h-[64px]">
           {mobileTabs.map((tab) => {
             const isActive = pathname === tab.href;
+            const isPending = pendingHref === tab.href;
             const Icon = tab.icon;
             return (
               <Link
                 key={tab.href}
                 href={tab.href}
-                className="relative flex flex-col items-center justify-center gap-1 group"
+                onClick={(event) => handleNavigation(event, tab.href)}
+                aria-current={isActive ? "page" : undefined}
+                aria-busy={isPending || undefined}
+                className="relative flex flex-col items-center justify-center gap-1 group cursor-pointer"
               >
-                {isActive && (
+                {(isActive || isPending) && (
                   <motion.span
                     layoutId="mobile-tab-active"
                     className="absolute top-1.5 w-9 h-1 rounded-full bg-[#D4A72C]"
                     transition={{ type: "spring", stiffness: 420, damping: 34 }}
                   />
                 )}
-                <Icon
-                  className={`w-[21px] h-[21px] transition-colors ${
-                    isActive ? "text-[#C29322] dark:text-[#F0C95A]" : "text-slate-400 dark:text-slate-500"
-                  }`}
-                  strokeWidth={isActive ? 2.4 : 2}
-                />
+                {isPending ? (
+                  <Loader2 className="w-[21px] h-[21px] animate-spin text-[#C29322] dark:text-[#F0C95A]" aria-hidden="true" />
+                ) : (
+                  <Icon
+                    className={`w-[21px] h-[21px] transition-colors ${
+                      isActive ? "text-[#C29322] dark:text-[#F0C95A]" : "text-slate-400 dark:text-slate-500"
+                    }`}
+                    strokeWidth={isActive ? 2.4 : 2}
+                  />
+                )}
                 <span
                   className={`text-[10px] font-[700] transition-colors ${
-                    isActive ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
+                    isActive || isPending ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
                   }`}
                 >
                   {tab.label}
                 </span>
+                {isPending && <span className="sr-only" role="status">Opening {tab.label}</span>}
               </Link>
             );
           })}

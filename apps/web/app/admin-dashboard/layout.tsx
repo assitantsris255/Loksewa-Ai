@@ -1,7 +1,7 @@
 // @ts-nocheck
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -44,6 +44,7 @@ import {
   Globe,
   Package,
   Bookmark,
+  Loader2,
 } from "lucide-react";
 
 // ===== Sidebar Nav Config =====
@@ -132,19 +133,23 @@ const SIDEBAR_NAV: NavSection[] = [
 function SidebarNavItem({
   item,
   active,
+  pending,
   collapsed,
-  onMobileClose,
+  onNavigate,
 }: {
   item: NavItem;
   active: boolean;
+  pending: boolean;
   collapsed: boolean;
-  onMobileClose: () => void;
+  onNavigate: (event: React.MouseEvent<HTMLAnchorElement>, href: string) => void;
 }) {
   return (
     <Link
       href={item.href}
-      onClick={onMobileClose}
+      onClick={(event) => onNavigate(event, item.href)}
       title={collapsed ? item.title : undefined}
+      aria-current={active ? "page" : undefined}
+      aria-busy={pending || undefined}
       className={cn(
         "flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[13.5px] font-medium transition-all duration-150",
         active
@@ -158,7 +163,13 @@ function SidebarNavItem({
         strokeWidth={active ? 2 : 1.5}
       />
       {!collapsed && <span className="truncate">{item.title}</span>}
-      {!collapsed && active && (
+      {pending && (
+        <span role="status" aria-label={`Opening ${item.title}`} className={cn("shrink-0", collapsed ? "" : "ml-auto")}>
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#D4A72C]" aria-hidden="true" />
+          <span className="sr-only">Opening {item.title}</span>
+        </span>
+      )}
+      {!collapsed && active && !pending && (
         <ChevronRight className="ml-auto h-3.5 w-3.5 text-slate-400" />
       )}
     </Link>
@@ -179,12 +190,65 @@ function AdminSidebar({
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const pendingHrefRef = useRef<string | null>(null);
+
+  const handleNavigation = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey ||
+      event.currentTarget.target === "_blank"
+    ) {
+      onMobileClose();
+      return;
+    }
+
+    const currentRoute = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+    if (href === currentRoute) {
+      pendingHrefRef.current = null;
+      setPendingHref(null);
+      onMobileClose();
+      return;
+    }
+
+    if (pendingHrefRef.current === href) {
+      event.preventDefault();
+      return;
+    }
+
+    pendingHrefRef.current = href;
+    setPendingHref(href);
+  };
+
+  useEffect(() => {
+    if (!pendingHref) return;
+    const [hrefPath, hrefQuery] = pendingHref.split("?");
+    const currentQuery = searchParams.toString();
+    const destinationReached = pathname === hrefPath && (
+      hrefQuery === undefined ||
+      currentQuery === hrefQuery ||
+      currentQuery.includes(hrefQuery)
+    );
+
+    if (destinationReached) {
+      pendingHrefRef.current = null;
+      setPendingHref(null);
+      setMobileOpen(false);
+    }
+  }, [pathname, searchParams, pendingHref, setMobileOpen]);
 
   // Find the single best matching nav item based on specificity:
   // 1. Matches with exact query parameters take highest priority.
   // 2. Otherwise, the longest matching path prefix wins (so /admin-dashboard/academic/questions
   //    matches Question Bank rather than also highlighting Academic Management).
   const activeItem = useMemo(() => {
+    const pendingItem = SIDEBAR_NAV.flatMap(section => section.items).find(item => item.href === pendingHref);
+    if (pendingItem) return pendingItem;
+
     let bestItem: NavItem | null = null;
     let bestScore = -1;
 
@@ -221,7 +285,7 @@ function AdminSidebar({
     }
 
     return bestItem;
-  }, [pathname, searchParams]);
+  }, [pathname, searchParams, pendingHref]);
 
 
   const sidebarContent = (
@@ -284,8 +348,9 @@ function AdminSidebar({
                     key={item.href}
                     item={item}
                     active={activeItem?.href === item.href}
+                    pending={pendingHref === item.href}
                     collapsed={collapsed}
-                    onMobileClose={() => setMobileOpen(false)}
+                    onNavigate={handleNavigation}
                   />
                 ))}
               </nav>

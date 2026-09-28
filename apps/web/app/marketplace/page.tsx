@@ -9,8 +9,6 @@ import {
   Heart, ShoppingCart, Star, Plus, Minus, CreditCard, ShieldCheck,
   Truck, ArrowRight, BookMarked, CheckCircle2, Video, Loader2
 } from "lucide-react";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { publicApi, type PublicProduct } from "@/lib/api/public-api";
@@ -175,8 +173,6 @@ export default function MarketplacePage() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#0A1118] text-slate-900 dark:text-slate-50 flex flex-col font-sans selection:bg-[#163E6B]/20 dark:selection:bg-[#D4A72C]/30">
-      <Navbar />
-
       <main className="flex-1">
           {/* 1. HERO SECTION */}
           <section className="relative pt-32 pb-20 overflow-hidden bg-[#0A1118] border-b border-white/10">
@@ -708,7 +704,6 @@ export default function MarketplacePage() {
       {/* WISHLIST PROMPT */}
       
 
-      <Footer />
     </div>
   );
 }

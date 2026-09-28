@@ -2,8 +2,6 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
 import { Button } from "@/components/ui/button";
 import { marketplaceApi, Cart, Order, PaymentMethod } from "@/lib/api/marketplace";
 import { ArrowLeft, ArrowRight, CheckCircle2, ImageIcon, UploadCloud, X, AlertCircle } from "lucide-react";
@@ -104,11 +102,9 @@ export default function CheckoutPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-[#0A1118] flex flex-col justify-between">
-        <Navbar />
         <main className="flex-1 max-w-6xl mx-auto w-full py-10 px-4">
           <PageSkeleton layout="detail" />
         </main>
-        <Footer />
       </div>
     );
   }
@@ -155,7 +151,6 @@ export default function CheckoutPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#0A1118] text-slate-900 dark:text-slate-50 flex flex-col font-sans">
-      <Navbar />
       <main className="flex-1 container mx-auto px-4 py-24 max-w-6xl">
         <div className="flex justify-between items-center mb-12">
           <button onClick={() => router.push("/marketplace/cart")} className="flex items-center text-sm font-semibold text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors">
@@ -330,7 +325,6 @@ export default function CheckoutPage() {
           </div>
         )}
       </main>
-      <Footer />
     </div>
   );
 }

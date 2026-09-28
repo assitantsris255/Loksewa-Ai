@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { CheckCircle2, XCircle, Clock, Eye, Gift, ImageIcon, X, ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiClient } from "@/lib/api/client";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL?.replace("/api", "") || "http://127.0.0.1:8000";
@@ -247,25 +248,25 @@ export default function AdminApplicationsPage() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white p-5 rounded-[16px] border border-slate-200 shadow-sm flex flex-col justify-center">
           <p className="text-sm font-medium text-slate-500">Total Requests</p>
-          <p className="text-2xl font-bold text-[#0B2545]">{rows.length}</p>
+          {isLoading ? <Skeleton className="mt-1 h-8 w-16" /> : <p className="text-2xl font-bold text-[#0B2545]">{rows.length}</p>}
         </div>
         <div className="bg-white p-5 rounded-[16px] border border-amber-200 shadow-sm flex flex-col justify-center bg-amber-50/30">
           <p className="text-sm font-medium text-amber-600">Pending</p>
-          <p className="text-2xl font-bold text-amber-700">{pendingCount}</p>
+          {isLoading ? <Skeleton className="mt-1 h-8 w-16" /> : <p className="text-2xl font-bold text-amber-700">{pendingCount}</p>}
         </div>
         <div className="bg-white p-5 rounded-[16px] border border-emerald-200 shadow-sm flex flex-col justify-center bg-emerald-50/30">
           <p className="text-sm font-medium text-emerald-600">Approved</p>
-          <p className="text-2xl font-bold text-emerald-700">{approvedCount}</p>
+          {isLoading ? <Skeleton className="mt-1 h-8 w-16" /> : <p className="text-2xl font-bold text-emerald-700">{approvedCount}</p>}
         </div>
         <div className="bg-[#0B2545] p-5 rounded-[16px] border border-[#163E6B] shadow-sm flex flex-col justify-center text-white">
           <p className="text-sm font-medium text-slate-300">Total Revenue</p>
-          <p className="text-2xl font-bold text-[#D4A72C]">Rs. {totalRevenue.toLocaleString()}</p>
+          {isLoading ? <Skeleton className="mt-1 h-8 w-28 bg-white/15" /> : <p className="text-2xl font-bold text-[#D4A72C]">Rs. {totalRevenue.toLocaleString()}</p>}
         </div>
       </div>
 
       <div className="bg-white rounded-[16px] border border-slate-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full" aria-busy={isLoading}>
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-left text-sm font-medium text-slate-500">
                 <th className="px-6 py-4">Student</th>
@@ -280,11 +281,18 @@ export default function AdminApplicationsPage() {
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
               {isLoading ? (
-                <tr>
-                  <td colSpan={8} className="px-6 py-12 text-center text-slate-500">
-                    Loading applications...
-                  </td>
-                </tr>
+                Array.from({ length: 5 }, (_, rowIndex) => (
+                  <tr key={`loading-${rowIndex}`} aria-hidden="true">
+                    <td className="px-6 py-5"><Skeleton className="h-4 w-28" />{rowIndex === 0 && <span role="status" aria-live="polite" className="sr-only">Loading applications</span>}</td>
+                    <td className="px-6 py-5"><Skeleton className="h-4 w-32" /></td>
+                    <td className="px-6 py-5"><Skeleton className="h-4 w-16" /></td>
+                    <td className="px-6 py-5"><Skeleton className="h-4 w-28" /></td>
+                    <td className="px-6 py-5"><Skeleton className="h-10 w-10" /></td>
+                    <td className="px-6 py-5"><Skeleton className="h-4 w-20" /></td>
+                    <td className="px-6 py-5"><Skeleton className="h-5 w-16 rounded-full" /></td>
+                    <td className="px-6 py-5"><Skeleton className="ml-auto h-8 w-24" /></td>
+                  </tr>
+                ))
               ) : rows.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-6 py-12 text-center text-slate-500">

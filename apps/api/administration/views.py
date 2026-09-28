@@ -1270,9 +1270,9 @@ class AdminExamsOverviewView(APIView):
         except Exception:
             pass
 
-        exam_stats = Exam.objects.aggregate(
+        exam_stats = Examination.objects.aggregate(
             total=Count('id'),
-            active=Count('id', filter=Q(is_active=True)),
+            active=Count('id', filter=Q(status__in=('published', 'live'))),
         )
         total_exams = exam_stats['total']
         active_exams = exam_stats['active']

@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { FocusModeProvider } from "@/contexts/FocusModeContext";
 import { OsDndGuideModal } from "@/components/student/focus/OsDndGuideModal";
+import { PublicSiteShell } from "@/components/layout/PublicSiteShell";
 import Providers from "./providers";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -40,7 +41,7 @@ export default function RootLayout({
           <Providers>
             <AuthProvider>
               <FocusModeProvider>
-                {children}
+                <PublicSiteShell>{children}</PublicSiteShell>
                 {/* OS DND guide — appears on every page when Focus Mode is toggled ON */}
                 <OsDndGuideModal />
               </FocusModeProvider>
