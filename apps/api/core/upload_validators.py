@@ -26,6 +26,22 @@ def validate_document_size_20mb(file):
     if file.size > 20 * 1024 * 1024:
         raise ValidationError("File too large - maximum size is 20MB.")
 
+
+def validate_pdf_upload(file):
+    if not file.name.lower().endswith('.pdf'):
+        raise ValidationError('Only PDF files are accepted.')
+    if file.size <= 5:
+        raise ValidationError('The PDF file is empty or invalid.')
+    content_type = getattr(file, 'content_type', None)
+    if content_type and content_type not in ('application/pdf', 'application/x-pdf'):
+        raise ValidationError('The uploaded file must have a PDF MIME type.')
+    current_position = file.tell() if hasattr(file, 'tell') else None
+    header = file.read(5)
+    if current_position is not None:
+        file.seek(current_position)
+    if header != b'%PDF-':
+        raise ValidationError('The uploaded file is not a valid PDF document.')
+
 validate_image_extension = FileExtensionValidator(
     allowed_extensions=['jpg', 'jpeg', 'png', 'webp', 'gif']
 )

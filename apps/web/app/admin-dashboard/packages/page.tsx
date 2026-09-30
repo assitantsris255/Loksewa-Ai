@@ -14,6 +14,7 @@ import {
   BookOpen,
   Layers,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -42,7 +44,7 @@ import {
   SubscriptionPlanInput,
 } from "@/lib/api/subscriptions";
 import { publicApi, PublicCourse } from "@/lib/api/public-api";
-import { adminSyllabusApi, AdminExamCategory } from "@/lib/api/admin-syllabus";
+import { adminSyllabusApi, AdminExamCategory, AdminPosition } from "@/lib/api/admin-syllabus";
 
 const EMPTY_FORM: SubscriptionPlanInput = {
   name: "",
@@ -71,9 +73,37 @@ const FEATURE_OPTIONS = [
   { key: "analytics", label: "Advanced Analytics" },
 ];
 
+function getCourseLevel(
+  course: PublicCourse,
+  academicExamById: Map<number, AdminPosition>
+): AdminPosition | null {
+  if (!course.exam || course.status !== "published") return null;
+  let exam = academicExamById.get(course.exam.id);
+  if (!exam) return null;
+
+  const visited = new Set<number>();
+  while (true) {
+    if (exam.status !== "active" || !exam.is_active) return null;
+    if (exam.parent === null) return exam;
+    if (visited.has(exam.id)) return null;
+    visited.add(exam.id);
+    const parent = academicExamById.get(exam.parent);
+    if (!parent) return null;
+    exam = parent;
+  }
+}
+
+function getCourseLevelName(
+  course: PublicCourse,
+  academicExamById: Map<number, AdminPosition>
+): string | null {
+  return getCourseLevel(course, academicExamById)?.name || null;
+}
+
 export default function AdminPackagesPage() {
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [courses, setCourses] = useState<PublicCourse[]>([]);
+  const [academicExams, setAcademicExams] = useState<AdminPosition[]>([]);
   const [allCategories, setAllCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -81,6 +111,8 @@ export default function AdminPackagesPage() {
   const [form, setForm] = useState<SubscriptionPlanInput>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [togglingPlanId, setTogglingPlanId] = useState<number | null>(null);
+  const [planPendingDelete, setPlanPendingDelete] = useState<SubscriptionPlan | null>(null);
+  const [deletingPlanId, setDeletingPlanId] = useState<number | null>(null);
 
   // Hierarchy filter & search state inside the modal
   const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
@@ -93,10 +125,12 @@ export default function AdminPackagesPage() {
       subscriptionsApi.adminListPlans(),
       publicApi.getCourses(),
       adminSyllabusApi.getCategories().catch(() => [] as AdminExamCategory[]),
+      adminSyllabusApi.getPositions().catch(() => [] as AdminPosition[]),
     ])
-      .then(([planData, coursesData, categoriesData]) => {
+      .then(([planData, coursesData, categoriesData, examsData]) => {
         setPlans([...planData].sort((a, b) => a.display_order - b.display_order));
         if (coursesData) setCourses(coursesData);
+        setAcademicExams(examsData);
         if (categoriesData && categoriesData.length > 0) {
           const names = categoriesData
             .filter((cat) => cat.is_active)
@@ -111,12 +145,19 @@ export default function AdminPackagesPage() {
 
   useEffect(load, []);
 
+  const academicExamById = useMemo(
+    () => new Map(academicExams.map((exam) => [exam.id, exam])),
+    [academicExams]
+  );
+
   // Extract unique categories from both syllabus categories and loaded courses
   const availableCategories = useMemo(() => {
     const set = new Set<string>();
     allCategories.forEach((cat) => set.add(cat));
     courses.forEach((c) => {
-      if (c.exam?.category_name) set.add(c.exam.category_name);
+      if (getCourseLevel(c, academicExamById) && c.exam?.category_name) {
+        set.add(c.exam.category_name);
+      }
     });
     return Array.from(set).sort((a, b) => {
       const idxA = allCategories.indexOf(a);
@@ -126,41 +167,41 @@ export default function AdminPackagesPage() {
       if (idxB !== -1) return 1;
       return a.localeCompare(b);
     });
-  }, [allCategories, courses]);
+  }, [allCategories, academicExamById, courses]);
 
   // Extract unique levels for the selected category
   const availableLevels = useMemo(() => {
-    const set = new Set<string>();
-    courses.forEach((c) => {
-      const matchCat =
-        selectedCategory === "ALL" || c.exam?.category_name === selectedCategory;
-      if (matchCat && c.exam?.parent_name) {
-        set.add(c.exam.parent_name);
-      }
-    });
-    return Array.from(set).sort();
-  }, [courses, selectedCategory]);
+    return academicExams
+      .filter((exam) => {
+        const matchesCategory =
+          selectedCategory === "ALL" || exam.category_name === selectedCategory;
+        return exam.is_active && exam.parent === null && matchesCategory;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [academicExams, selectedCategory]);
 
   // Filter courses based on Category, Level, and Search Query
   const filteredCourses = useMemo(() => {
     return courses.filter((c) => {
+      const levelName = getCourseLevelName(c, academicExamById);
+      if (!getCourseLevel(c, academicExamById)) return false;
       if (selectedCategory !== "ALL" && c.exam?.category_name !== selectedCategory) {
         return false;
       }
-      if (selectedLevel !== "ALL" && c.exam?.parent_name !== selectedLevel) {
+      if (selectedLevel !== "ALL" && String(getCourseLevel(c, academicExamById)?.id) !== selectedLevel) {
         return false;
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const matchTitle = c.title.toLowerCase().includes(q);
         const matchExam = c.exam?.title?.toLowerCase().includes(q) ?? false;
-        const matchLevel = c.exam?.parent_name?.toLowerCase().includes(q) ?? false;
+        const matchLevel = levelName?.toLowerCase().includes(q) ?? false;
         const matchCategory = c.exam?.category_name?.toLowerCase().includes(q) ?? false;
         return matchTitle || matchExam || matchLevel || matchCategory;
       }
       return true;
     });
-  }, [courses, selectedCategory, selectedLevel, searchQuery]);
+  }, [courses, academicExamById, selectedCategory, selectedLevel, searchQuery]);
 
   // Courses currently selected in the form
   const selectedCoursesList = useMemo(() => {
@@ -321,6 +362,25 @@ export default function AdminPackagesPage() {
     }
   };
 
+  const deletePlan = async () => {
+    if (!planPendingDelete) return;
+    setDeletingPlanId(planPendingDelete.id);
+    try {
+      const result = await subscriptionsApi.adminDeletePlan(planPendingDelete.id);
+      toast.success(
+        result.archived
+          ? "Package archived; purchase history was preserved."
+          : "Package deleted."
+      );
+      setPlanPendingDelete(null);
+      load();
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete package.");
+    } finally {
+      setDeletingPlanId(null);
+    }
+  };
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {/* Header */}
@@ -330,7 +390,7 @@ export default function AdminPackagesPage() {
             Package Management
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Create and manage student subscription packages based on the canonical academic preparation hierarchy.
+            Manage access bundles using existing Courses; packages do not own academic content.
           </p>
         </div>
         <Button
@@ -533,34 +593,40 @@ export default function AdminPackagesPage() {
                               : "bg-slate-100 text-slate-500 border-none font-medium"
                           }
                         >
-                          {plan.status === "ACTIVE" ? "Published" : "Draft"}
+                          {plan.status === "ACTIVE"
+                            ? "Published"
+                            : plan.status === "ARCHIVED"
+                            ? "Archived"
+                            : "Draft"}
                         </Badge>
                       </td>
 
                       <td className="px-5 py-4 text-right space-x-1.5 whitespace-nowrap">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => togglePublish(plan)}
-                          disabled={togglingPlanId === plan.id}
-                          aria-busy={togglingPlanId === plan.id}
-                          className="gap-1.5 text-xs h-8"
-                        >
-                          {togglingPlanId === plan.id ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              {plan.status === "ACTIVE" ? "Unpublishing..." : "Publishing..."}
-                            </>
-                          ) : plan.status === "ACTIVE" ? (
-                            <>
-                              <EyeOff className="w-3.5 h-3.5" /> Unpublish
-                            </>
-                          ) : (
-                            <>
-                              <Eye className="w-3.5 h-3.5" /> Publish
-                            </>
-                          )}
-                        </Button>
+                        {plan.status !== "ARCHIVED" && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => togglePublish(plan)}
+                            disabled={togglingPlanId === plan.id}
+                            aria-busy={togglingPlanId === plan.id}
+                            className="gap-1.5 text-xs h-8"
+                          >
+                            {togglingPlanId === plan.id ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                {plan.status === "ACTIVE" ? "Unpublishing..." : "Publishing..."}
+                              </>
+                            ) : plan.status === "ACTIVE" ? (
+                              <>
+                                <EyeOff className="w-3.5 h-3.5" /> Unpublish
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="w-3.5 h-3.5" /> Publish
+                              </>
+                            )}
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -568,6 +634,21 @@ export default function AdminPackagesPage() {
                           className="gap-1.5 text-xs h-8 border-slate-300 hover:border-slate-400"
                         >
                           <Pencil className="w-3.5 h-3.5" /> Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPlanPendingDelete(plan)}
+                          disabled={deletingPlanId === plan.id}
+                          aria-label={`Delete ${plan.name}`}
+                          title="Delete package"
+                          className="h-8 w-8 p-0 text-rose-700 hover:bg-rose-50 hover:border-rose-300"
+                        >
+                          {deletingPlanId === plan.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
                         </Button>
                       </td>
                     </tr>
@@ -906,8 +987,8 @@ export default function AdminPackagesPage() {
                         <SelectContent className="bg-white text-slate-900 border-slate-200 shadow-xl">
                           <SelectItem value="ALL" className="text-slate-900 focus:bg-slate-100 focus:text-slate-900 cursor-pointer">All Levels</SelectItem>
                           {availableLevels.map((lvl) => (
-                            <SelectItem key={lvl} value={lvl} className="text-slate-900 focus:bg-slate-100 focus:text-slate-900 cursor-pointer">
-                              {lvl}
+                            <SelectItem key={lvl.id} value={String(lvl.id)} className="text-slate-900 focus:bg-slate-100 focus:text-slate-900 cursor-pointer">
+                              {lvl.name}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -974,26 +1055,22 @@ export default function AdminPackagesPage() {
                   )}
 
                   {/* Selectable Preparations Cards Container */}
-                  {courses.length === 0 ? (
+                  {loading ? (
                     <div className="p-8 text-center text-xs text-slate-400">
                       Loading available preparations...
                     </div>
-                  ) : filteredCourses.length === 0 ? (
+                  ) : courses.length === 0 ? (
                     <div className="p-8 text-center bg-white rounded-lg border border-dashed border-slate-200">
                       <p className="text-xs text-slate-500 font-medium">
-                        No preparations found matching the current filters.
+                        No preparations available yet.
                       </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedCategory("ALL");
-                          setSelectedLevel("ALL");
-                          setSearchQuery("");
-                        }}
-                        className="text-xs text-[#0B2545] font-semibold hover:underline mt-1"
-                      >
-                        Reset filters
-                      </button>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Publish a preparation in the syllabus before creating a package.
+                      </p>
+                    </div>
+                  ) : filteredCourses.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-slate-400">
+                      No preparations found matching the current filters.
                     </div>
                   ) : (
                     <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
@@ -1003,6 +1080,7 @@ export default function AdminPackagesPage() {
                             ? form.course === c.id
                             : form.eligible_courses.includes(c.id);
                         const isCS = c.is_coming_soon;
+                        const courseLevel = getCourseLevel(c, academicExamById);
 
                         return (
                           <div
@@ -1059,10 +1137,10 @@ export default function AdminPackagesPage() {
                                 {c.exam?.category_name && (
                                   <span>{c.exam.category_name}</span>
                                 )}
-                                {c.exam?.parent_name && (
+                                {courseLevel && courseLevel.id !== c.exam?.id && (
                                   <>
                                     <span className="text-slate-300">›</span>
-                                    <span>{c.exam.parent_name}</span>
+                                    <span>{courseLevel.name}</span>
                                   </>
                                 )}
                                 {c.exam?.title && (
@@ -1154,6 +1232,45 @@ export default function AdminPackagesPage() {
               ) : (
                 "Create Package"
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(planPendingDelete)}
+        onOpenChange={(open) => {
+          if (!open && deletingPlanId === null) setPlanPendingDelete(null);
+        }}
+      >
+        <DialogContent className="max-w-md bg-white text-slate-900">
+          <DialogHeader>
+            <DialogTitle>Delete Package?</DialogTitle>
+            <DialogDescription>
+              This removes the package from active listings. If subscriptions, payments, enrollments,
+              course selections, or audit history depend on it, it will be archived instead so
+              historical records remain intact.
+            </DialogDescription>
+          </DialogHeader>
+          {planPendingDelete && (
+            <p className="text-sm font-semibold text-slate-800">{planPendingDelete.name}</p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPlanPendingDelete(null)}
+              disabled={deletingPlanId !== null}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={deletePlan}
+              disabled={deletingPlanId !== null}
+              className="bg-rose-700 text-white hover:bg-rose-800"
+            >
+              {deletingPlanId !== null ? "Deleting..." : "Delete Package"}
             </Button>
           </DialogFooter>
         </DialogContent>

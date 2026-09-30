@@ -354,7 +354,10 @@ def get_authorized_examination_filter(user, target_course=None):
 
     auth_courses = authorized_courses(user)
     if not auth_courses.exists():
-        return None
+        # Course-less published/live exams are platform-wide exams that remain
+        # visible to students without a course enrollment. Course-scoped exams
+        # continue to respect enrollment rules.
+        return Q(status__in=['published', 'live'], course__isnull=True)
 
     if target_course is not None:
         from .models import Course
@@ -373,6 +376,7 @@ def get_authorized_examination_filter(user, target_course=None):
     auth_course_ids = list(auth_courses.values_list('id', flat=True))
     auth_exam_scope = authorized_exam_ids(user) or set()
     q = Q(course_id__in=auth_course_ids)
+    q |= Q(course__isnull=True, status__in=['published', 'live'])
     if auth_exam_scope:
         q |= Q(course__isnull=True, exam_id__in=auth_exam_scope)
     return q
@@ -392,7 +396,8 @@ def is_examination_authorized_for_student(user, examination):
 
     auth_courses = authorized_courses(user)
     if not auth_courses.exists():
-        return False
+        # Global, course-less published/live exams are open to the student base.
+        return bool(examination.status in ('published', 'live') and examination.course_id is None)
 
     # If exam is explicitly tied to a course, user must be enrolled/authorized in that course
     if examination.course_id:

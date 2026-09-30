@@ -240,6 +240,13 @@ export default function QuestionBankPage() {
             Import Excel
           </Link>
           <Link
+            href="/admin-dashboard/exams/subjective-generator"
+            className="bg-white border border-indigo-200 text-indigo-800 hover:bg-indigo-50 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium text-sm whitespace-nowrap"
+          >
+            <Wand2 className="w-4 h-4" />
+            Generate Subjective Live Exam
+          </Link>
+          <Link
             href="/admin-dashboard/academic/questions/create"
             className="bg-[#0B2545] hover:bg-[#163E6C] text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium text-sm shadow-md whitespace-nowrap"
           >

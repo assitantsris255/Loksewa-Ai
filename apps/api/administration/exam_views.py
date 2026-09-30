@@ -1,11 +1,24 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db.models import Count, Avg
 from django.utils import timezone
 import copy
 
-from exams.models import Examination, ExaminationAttempt, QuestionSet
+from exams.models import (
+    Exam as AcademicExam,
+    Examination,
+    ExaminationAttempt,
+    ExaminationQuestion,
+    ExaminationRequest,
+    QuestionSet,
+    Subject,
+    SubjectiveQuestionSet,
+    Topic,
+)
+from exams.assignment_service import SubjectiveExamAssignmentService
+from exams.selection_service import QuestionSelectionService
+from exams.student_serializers import ExaminationRequestSerializer
 from .exam_serializers import ExaminationSerializer, ExaminationAttemptSerializer
 from .examination_question_views import ExaminationQuestionMixin
 # rest_framework.permissions.IsAdminUser checks Django's is_staff flag, which
@@ -15,13 +28,358 @@ from .examination_question_views import ExaminationQuestionMixin
 # wasn't separately flagged is_staff, silently blocking exam creation.
 from .permissions import IsAdminUser, IsEvaluatorUser
 
+
+class SubjectiveQuestionSetSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source='exam_category.name', read_only=True)
+    level_name = serializers.CharField(source='level.name', read_only=True)
+    course_name = serializers.CharField(source='course.title', read_only=True, allow_null=True)
+    subject_name = serializers.CharField(source='subject.name', read_only=True, allow_null=True)
+    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True, allow_null=True)
+    usage_count = serializers.IntegerField(read_only=True)
+    last_used_at = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = SubjectiveQuestionSet
+        fields = [
+            'id', 'title', 'description', 'pdf_file', 'category_name', 'level_name', 'course', 'course_name',
+            'subject', 'subject_name', 'duration_minutes', 'total_marks', 'question_count', 'status',
+            'created_by', 'created_by_name', 'created_at', 'updated_at', 'usage_count', 'last_used_at'
+        ]
+        read_only_fields = ['id', 'created_by', 'created_by_name', 'created_at', 'updated_at', 'usage_count', 'last_used_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['created_by'] = request.user
+        instance = SubjectiveQuestionSet(**validated_data)
+        instance.full_clean()
+        instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.full_clean()
+        instance.save()
+        return instance
+
+
+class SubjectiveQuestionSetViewSet(viewsets.ModelViewSet):
+    queryset = SubjectiveQuestionSet.objects.select_related(
+        'exam_category', 'level', 'course', 'subject', 'created_by'
+    ).order_by('-created_at')
+    serializer_class = SubjectiveQuestionSetSerializer
+    permission_classes = [IsAdminUser]
+
+    @action(detail=True, methods=['post'], url_path='assign')
+    def assign(self, request, pk=None):
+        request_id = request.data.get('request_id')
+        if request_id is None:
+            return Response({'detail': 'request_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            exam_request = ExaminationRequest.objects.select_related(
+                'academic_exam', 'course', 'subject', 'topic'
+            ).get(pk=request_id, request_type='subjective_live')
+        except ExaminationRequest.DoesNotExist:
+            return Response({'detail': 'Pending subjective request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        exam = SubjectiveExamAssignmentService.assign_subjective_exam(
+            exam_request,
+            mode='manual',
+            question_set_id=pk,
+        )
+        if exam is None:
+            return Response({'detail': 'No active eligible subjective question set was found for this request.'}, status=status.HTTP_409_CONFLICT)
+        return Response({
+            'id': exam.id,
+            'title': exam.title,
+            'subjective_question_set_id': exam.subjective_question_set_id,
+            'request_id': exam_request.id,
+            'status': exam.status,
+        }, status=status.HTTP_200_OK)
+
+
 class ExaminationViewSet(ExaminationQuestionMixin, viewsets.ModelViewSet):
-    queryset = Examination.objects.all().select_related('category', 'exam', 'subject', 'question_set').order_by('-created_at')
+    queryset = Examination.objects.all().select_related('category', 'exam', 'subject', 'topic', 'question_set').order_by('-created_at')
     serializer_class = ExaminationSerializer
     permission_classes = [IsAdminUser]
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        from rest_framework.exceptions import ValidationError
+        from django.db import transaction
+
+        request_id = serializer.validated_data.pop('request_id', None)
+        with transaction.atomic():
+            examination = serializer.save(created_by=self.request.user)
+            if request_id:
+                exam_request = ExaminationRequest.objects.select_for_update().filter(
+                    pk=request_id, request_type='subjective_live', status='pending'
+                ).first()
+                if not exam_request:
+                    raise ValidationError({'request_id': 'Pending subjective exam request not found.'})
+                if examination.exam_type != 'subjective' or examination.exam_id != exam_request.academic_exam_id:
+                    raise ValidationError({'request_id': 'The draft must be a subjective exam for the requested academic exam.'})
+                if exam_request.course_id and examination.course_id != exam_request.course_id:
+                    raise ValidationError({'request_id': 'The draft course must match the student request.'})
+                if exam_request.subject_id and examination.subject_id != exam_request.subject_id:
+                    raise ValidationError({'request_id': 'The draft subject must match the student request.'})
+                if exam_request.topic_id and examination.topic_id != exam_request.topic_id:
+                    raise ValidationError({'request_id': 'The draft topic must match the student request.'})
+                if exam_request.examination_id:
+                    raise ValidationError({'request_id': 'This request is already linked to an examination.'})
+                exam_request.examination = examination
+                exam_request.save(update_fields=['examination', 'updated_at'])
+
+    @action(detail=False, methods=['post'], url_path='generate-subjective-live')
+    def generate_subjective_live(self, request):
+        import uuid
+        from django.core.exceptions import ValidationError
+        from django.core.files.base import ContentFile
+        from django.db import IntegrityError, transaction
+        from django.utils import timezone
+        from django.utils.dateparse import parse_datetime
+        from exams.subjective_paper_generator import build_subjective_paper_pdf
+
+        try:
+            generation_key = uuid.UUID(str(request.data.get('generation_key', '')))
+            raw_exam_id = request.data.get('exam') or request.data.get('exam_id')
+            academic_exam_id = int(raw_exam_id) if raw_exam_id else None
+            question_count = int(request.data.get('question_count'))
+            duration = int(request.data.get('time_limit', 90))
+            request_id = int(request.data['request_id']) if request.data.get('request_id') else None
+        except (TypeError, ValueError, AttributeError):
+            return Response({'detail': 'generation_key and question_count are required, with valid exam/request IDs.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not 1 <= question_count <= 200 or not 1 <= duration <= 1440:
+            return Response({'detail': 'Question count must be 1-200 and duration must be 1-1440 minutes.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        subjective_request = None
+        if request_id:
+            subjective_request = ExaminationRequest.objects.select_related(
+                'academic_exam', 'course', 'subject', 'topic'
+            ).filter(pk=request_id, request_type='subjective_live', status='pending').first()
+            if not subjective_request:
+                return Response({'detail': 'Pending subjective exam request not found.'}, status=status.HTTP_404_NOT_FOUND)
+            if academic_exam_id and academic_exam_id != subjective_request.academic_exam_id:
+                return Response({'detail': 'The selected academic exam does not match this request.'}, status=status.HTTP_400_BAD_REQUEST)
+            academic_exam_id = subjective_request.academic_exam_id
+        if academic_exam_id is None:
+            return Response({'detail': 'exam or request_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        academic_exam = AcademicExam.objects.select_related('category').filter(pk=academic_exam_id, is_active=True).first()
+        if not academic_exam:
+            return Response({'detail': 'An active academic exam is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing = None
+        if subjective_request and subjective_request.examination_id:
+            existing = Examination.objects.filter(pk=subjective_request.examination_id).first()
+            if not existing or existing.exam_type != 'subjective' or existing.status != 'draft':
+                return Response({'detail': 'The request is already linked to a non-draft examination.'}, status=status.HTTP_409_CONFLICT)
+            generation_key = existing.generation_key
+        else:
+            existing = Examination.objects.filter(generation_key=generation_key).first()
+        regenerate = str(request.data.get('regenerate', '')).lower() in ('1', 'true', 'yes')
+        if existing:
+            if existing.created_by_id != request.user.id or existing.exam_type != 'subjective':
+                return Response({'detail': 'This generation key is not available to this admin.'}, status=status.HTTP_409_CONFLICT)
+            if existing.status != 'draft':
+                return Response({'detail': 'Published or reviewed papers cannot be regenerated.'}, status=status.HTTP_409_CONFLICT)
+            if not regenerate:
+                if subjective_request:
+                    with transaction.atomic():
+                        locked_request = ExaminationRequest.objects.select_for_update().get(pk=subjective_request.pk)
+                        if locked_request.status != 'pending':
+                            return Response({'detail': 'This subjective request is no longer pending.'}, status=status.HTTP_409_CONFLICT)
+                        locked_request.examination = existing
+                        locked_request.save(update_fields=['examination', 'updated_at'])
+                return Response({
+                    'id': existing.id, 'title': existing.title, 'status': existing.status,
+                    'total_questions': existing.total_questions, 'total_marks': existing.total_marks,
+                    'has_question_paper': bool(existing.question_paper_pdf), 'reused': True,
+                }, status=status.HTTP_200_OK)
+
+        subject_id = request.data.get('subject') or (subjective_request.subject_id if subjective_request else None)
+        subject = None
+        if subject_id:
+            subject = Subject.objects.filter(pk=subject_id, paper__exam_id=academic_exam.id).first()
+            if not subject:
+                return Response({'detail': 'Subject must belong to the selected academic exam.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        topic_id = request.data.get('topic') or (subjective_request.topic_id if subjective_request else None)
+        topic = None
+        if topic_id:
+            topic = Topic.objects.filter(pk=topic_id, chapter__subject__paper__exam_id=academic_exam.id).first()
+            if not topic or (subject and topic.chapter.subject_id != subject.id):
+                return Response({'detail': 'Topic must belong to the selected exam and subject.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        course = None
+        course_id = request.data.get('course') or (subjective_request.course_id if subjective_request else None)
+        if course_id:
+            from courses.models import Course
+            course = Course.objects.filter(pk=course_id, exam_id=academic_exam.id, status='published').first()
+            if not course:
+                return Response({'detail': 'Course must be published and belong to the selected academic exam.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        question_type = str(request.data.get('question_type') or 'subjective').strip().lower()
+        allowed_question_types = {'subjective', 'objective', 'mixed', 'mcq', 'true_false'}
+        if question_type not in allowed_question_types:
+            return Response({'detail': 'Unsupported question type for a subjective examination.'}, status=status.HTTP_400_BAD_REQUEST)
+        selection_type = None if question_type == 'mixed' else question_type
+        excluded_ids = list(existing.examination_questions.values_list('question_id', flat=True)) if existing and regenerate else []
+        selection = QuestionSelectionService().select(
+            exam_id=academic_exam.id,
+            subject_id=subject.id if subject else None,
+            topic_id=topic.id if topic else None,
+            question_type=selection_type,
+            count=question_count,
+            randomize=True,
+            exclude_ids=excluded_ids,
+        )
+        if not selection['satisfied']:
+            return Response({
+                'detail': 'Not enough approved questions are available for this paper.',
+                'requested': selection['requested'], 'available': selection['available'],
+                'selected': selection['selected'], 'warnings': selection['warnings'],
+            }, status=status.HTTP_409_CONFLICT)
+
+        questions = selection['questions']
+        total_marks = sum(question.marks or 0 for question in questions)
+        title = str(request.data.get('title') or f'{academic_exam.name} Subjective Live Exam').strip()
+        if not title:
+            return Response({'detail': 'A title is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        start_value = request.data.get('start_time')
+        end_value = request.data.get('end_time')
+        start_time = parse_datetime(start_value) if start_value else None
+        end_time = parse_datetime(end_value) if end_value else None
+        if (start_value and start_time is None) or (end_value and end_time is None):
+            return Response({'detail': 'Start and end times must be valid ISO-8601 datetimes.'}, status=status.HTTP_400_BAD_REQUEST)
+        if start_time and timezone.is_naive(start_time):
+            start_time = timezone.make_aware(start_time)
+        if end_time and timezone.is_naive(end_time):
+            end_time = timezone.make_aware(end_time)
+        if start_time and end_time and end_time <= start_time:
+            return Response({'detail': 'The end time must come after the start time.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            pdf_bytes = build_subjective_paper_pdf(
+                title=title,
+                position_name=academic_exam.name,
+                subject_name=subject.name if subject else '',
+                course_name=course.title if course else '',
+                duration_minutes=duration,
+                total_marks=total_marks,
+                start_time=start_time,
+                instructions=str(request.data.get('instructions') or '').strip(),
+                questions=questions,
+            )
+        except ValidationError as exc:
+            return Response({'detail': '; '.join(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+        old_file = None
+        new_storage = None
+        new_file_name = None
+        try:
+            with transaction.atomic():
+                locked_request = None
+                if subjective_request:
+                    locked_request = ExaminationRequest.objects.select_for_update().get(pk=subjective_request.pk)
+                    if locked_request.status != 'pending':
+                        return Response({'detail': 'This subjective request is no longer pending.'}, status=status.HTTP_409_CONFLICT)
+                    expected_exam_id = existing.id if existing else None
+                    if locked_request.examination_id and locked_request.examination_id != expected_exam_id:
+                        return Response({'detail': 'This request is already linked to another examination.'}, status=status.HTTP_409_CONFLICT)
+                if existing:
+                    examination = Examination.objects.select_for_update().get(pk=existing.pk)
+                    if examination.status != 'draft':
+                        return Response({'detail': 'Only draft papers can be regenerated.'}, status=status.HTTP_409_CONFLICT)
+                    old_file = examination.question_paper_pdf.name if examination.question_paper_pdf else None
+                    examination.examination_questions.all().delete()
+                else:
+                    examination = Examination.objects.create(
+                        generation_key=generation_key,
+                        title=title,
+                        exam_type='subjective',
+                        objective_category=None,
+                        category=academic_exam.category,
+                        exam=academic_exam,
+                        course=course,
+                        subject=subject,
+                        topic=topic,
+                        instructions=str(request.data.get('instructions') or '').strip(),
+                        total_questions=len(questions),
+                        time_limit=duration,
+                        total_marks=total_marks,
+                        passing_marks=0,
+                        marks_per_question=1,
+                        start_time=start_time,
+                        end_time=end_time,
+                        randomize_questions=False,
+                        status='draft',
+                        created_by=request.user,
+                    )
+
+                examination.title = title
+                examination.course = course
+                examination.subject = subject
+                examination.topic = topic
+                examination.instructions = str(request.data.get('instructions') or '').strip()
+                examination.total_questions = len(questions)
+                examination.time_limit = duration
+                examination.total_marks = total_marks
+                examination.start_time = start_time
+                examination.end_time = end_time
+                examination.question_paper_pdf.save(
+                    f'subjective-exam-{generation_key}-{uuid.uuid4().hex}.pdf',
+                    ContentFile(pdf_bytes),
+                    save=False,
+                )
+                new_storage = examination.question_paper_pdf.storage
+                new_file_name = examination.question_paper_pdf.name
+                examination.question_paper_page_count = max(1, pdf_bytes.count(b'/Type /Page'))
+                examination.question_paper_file_size = len(pdf_bytes)
+                examination.save()
+                ExaminationQuestion.objects.bulk_create([
+                    ExaminationQuestion(
+                        examination=examination,
+                        question=question,
+                        order=index,
+                        marks=question.marks or 1,
+                    )
+                    for index, question in enumerate(questions, start=1)
+                ])
+                if locked_request:
+                    locked_request.examination = examination
+                    locked_request.save(update_fields=['examination', 'updated_at'])
+                if old_file:
+                    storage = examination.question_paper_pdf.storage
+                    transaction.on_commit(lambda: storage.delete(old_file))
+        except IntegrityError:
+            if new_storage and new_file_name:
+                new_storage.delete(new_file_name)
+            same_request = Examination.objects.filter(generation_key=generation_key).first()
+            if same_request:
+                return Response({
+                    'id': same_request.id, 'title': same_request.title, 'status': same_request.status,
+                    'total_questions': same_request.total_questions, 'total_marks': same_request.total_marks,
+                    'has_question_paper': bool(same_request.question_paper_pdf), 'reused': True,
+                }, status=status.HTTP_200_OK)
+            raise
+        except Exception:
+            if new_storage and new_file_name:
+                new_storage.delete(new_file_name)
+            raise
+
+        return Response({
+            'id': examination.id,
+            'title': examination.title,
+            'status': examination.status,
+            'total_questions': examination.total_questions,
+            'total_marks': examination.total_marks,
+            'time_limit': examination.time_limit,
+            'has_question_paper': bool(examination.question_paper_pdf),
+            'question_paper_page_count': examination.question_paper_page_count,
+            'question_paper_file_size': examination.question_paper_file_size,
+            'reused': False,
+        }, status=status.HTTP_201_CREATED if not existing else status.HTTP_200_OK)
 
     def perform_update(self, serializer):
         exam = self.get_object()
@@ -72,6 +430,18 @@ class ExaminationViewSet(ExaminationQuestionMixin, viewsets.ModelViewSet):
         is_subjective_pdf = exam.exam_type == 'subjective' and bool(exam.question_paper_pdf)
         if not is_subjective_pdf and assigned < 1:
             errors.append("Add at least one question (or upload a Question Paper PDF for subjective exams) before publishing.")
+        if exam.exam_type == 'subject' and exam.topic_id:
+            valid_assigned = exam.examination_questions.filter(
+                question__topic_id=exam.topic_id,
+                question__status='approved',
+                question__question_type__in=('mcq', 'true_false'),
+            ).count()
+            if valid_assigned != assigned:
+                errors.append("Every Topicwise Test question must be approved, objective, and belong to the selected topic.")
+            if exam.total_questions != assigned:
+                errors.append("The Topicwise Test question count must match its assigned questions.")
+            if not exam.course_id:
+                errors.append("Choose a course before publishing this Topicwise Test.")
         if exam.time_limit < 1:
             errors.append("Time Limit must be greater than 0.")
         if exam.total_marks < 1:
@@ -96,6 +466,20 @@ class ExaminationViewSet(ExaminationQuestionMixin, viewsets.ModelViewSet):
         # scheduling is expressed by start_time/end_time, not by extra statuses.
         exam.status = 'published'
         exam.save(update_fields=['status', 'updated_at'])
+
+        from exams.models import ExaminationRequest
+        now = timezone.now()
+        ExaminationRequest.objects.filter(
+            examination=exam,
+            request_type='subjective_live',
+            status='pending',
+        ).update(
+            status='approved',
+            reviewed_by=request.user,
+            reviewed_at=now,
+            rejection_reason='',
+            updated_at=now,
+        )
 
         from core.notification_service import NotificationService
         NotificationService.notify_students_exam_update(exam, 'published')
@@ -257,32 +641,62 @@ class ExaminationViewSet(ExaminationQuestionMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='question-paper')
     def upload_question_paper(self, request, pk=None):
         import os
+        import io
+        from PIL import Image, ImageOps
+        from django.core.files.base import ContentFile
+
         exam = self.get_object()
         file = request.FILES.get('file') or request.FILES.get('question_paper') or request.FILES.get('pdf_file')
         if not file:
-            return Response({'detail': 'No PDF file was provided.'}, status=status.HTTP_400_BAD_REQUEST)
-        if not file.name.lower().endswith('.pdf'):
-            return Response({'detail': 'Only PDF files are accepted for the question paper.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': 'No question paper file was provided.'}, status=status.HTTP_400_BAD_REQUEST)
         if file.size < 100:
-            return Response({'detail': 'The uploaded PDF file is empty or corrupted.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': 'The uploaded file is empty or corrupted.'}, status=status.HTTP_400_BAD_REQUEST)
         if file.size > 20 * 1024 * 1024:
             return Response({'detail': 'File size exceeds maximum allowed limit (20MB).'}, status=status.HTTP_400_BAD_REQUEST)
 
+        file_name_lower = file.name.lower()
         content = file.read()
-        if not content.startswith(b'%PDF-'):
-            return Response({'detail': 'The uploaded file is not a valid PDF document (missing %PDF- header).'}, status=status.HTTP_400_BAD_REQUEST)
-        page_count = max(1, content.count(b'/Type /Page\n') + content.count(b'/Type /Page\r') + content.count(b'/Type/Page'))
         file.seek(0)
 
-        exam.question_paper_pdf = file
+        # 1. Handle PDF
+        if file_name_lower.endswith('.pdf') or content.startswith(b'%PDF-'):
+            if not content.startswith(b'%PDF-'):
+                return Response({'detail': 'The uploaded file is not a valid PDF document (missing %PDF- header).'}, status=status.HTTP_400_BAD_REQUEST)
+            page_count = max(1, content.count(b'/Type /Page\n') + content.count(b'/Type /Page\r') + content.count(b'/Type/Page'))
+            final_file = file
+            final_file.seek(0)
+            final_size = file.size
+        # 2. Handle image formats (JPG, PNG, WEBP) by converting to standardized PDF
+        elif any(file_name_lower.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.webp')) or (file.content_type and file.content_type.startswith('image/')):
+            try:
+                img = Image.open(file)
+                try:
+                    img = ImageOps.exif_transpose(img)
+                except Exception:
+                    pass
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                pdf_buffer = io.BytesIO()
+                img.save(pdf_buffer, format='PDF', quality=85, resolution=150.0)
+                pdf_bytes = pdf_buffer.getvalue()
+                clean_name = f"{os.path.splitext(file.name)[0]}.pdf"
+                final_file = ContentFile(pdf_bytes, name=clean_name)
+                page_count = 1
+                final_size = len(pdf_bytes)
+            except Exception as e:
+                return Response({'detail': f'Failed to process question paper image: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({'detail': 'Only PDF documents and image files (JPG, PNG, WEBP) are accepted for the question paper.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        exam.question_paper_pdf = final_file
         exam.question_paper_page_count = page_count
-        exam.question_paper_file_size = file.size
+        exam.question_paper_file_size = final_size
         exam.save(update_fields=['question_paper_pdf', 'question_paper_page_count', 'question_paper_file_size', 'updated_at'])
 
         return Response({
             'detail': 'Question paper uploaded successfully.',
             'page_count': page_count,
-            'file_size': file.size,
+            'file_size': final_size,
             'filename': os.path.basename(exam.question_paper_pdf.name),
         }, status=status.HTTP_200_OK)
 
@@ -333,6 +747,71 @@ class ExaminationViewSet(ExaminationQuestionMixin, viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
+class AdminExaminationRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAdminUser]
+    serializer_class = ExaminationRequestSerializer
+
+    def get_queryset(self):
+        queryset = ExaminationRequest.objects.select_related(
+            'student', 'examination', 'reviewed_by', 'academic_exam', 'course', 'subject', 'topic'
+        ).all()
+        status_filter = self.request.query_params.get('status')
+        if status_filter in ('pending', 'approved', 'rejected'):
+            queryset = queryset.filter(status=status_filter)
+        return queryset
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        from django.db import transaction
+        from django.utils import timezone
+
+        with transaction.atomic():
+            exam_request = ExaminationRequest.objects.select_for_update().get(pk=self.get_object().pk)
+            if exam_request.status != 'pending':
+                return Response({'detail': 'Only pending requests can be approved.'}, status=status.HTTP_409_CONFLICT)
+            if exam_request.request_type == 'subjective_live':
+                if not exam_request.examination_id:
+                    auto_exam = SubjectiveExamAssignmentService.assign_subjective_exam(exam_request, mode='auto')
+                    if auto_exam is None:
+                        return Response(
+                            {'detail': 'No active subjective question set is available to auto-assign for this request.'},
+                            status=status.HTTP_409_CONFLICT,
+                        )
+                    exam_request = ExaminationRequest.objects.select_related(
+                        'student', 'examination', 'reviewed_by', 'academic_exam', 'course', 'subject', 'topic'
+                    ).get(pk=exam_request.pk)
+                elif exam_request.examination.status != 'published':
+                    return Response(
+                        {'detail': 'Generate, review, and publish the subjective paper before approving its request.'},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+            exam_request.status = 'approved'
+            exam_request.reviewed_by = request.user
+            exam_request.reviewed_at = timezone.now()
+            exam_request.rejection_reason = ''
+            exam_request.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'rejection_reason', 'updated_at'])
+        return Response(self.get_serializer(exam_request).data)
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        from django.db import transaction
+        from django.utils import timezone
+
+        reason = str(request.data.get('rejection_reason') or '').strip()
+        if not reason:
+            return Response({'detail': 'rejection_reason is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():
+            exam_request = ExaminationRequest.objects.select_for_update().get(pk=self.get_object().pk)
+            if exam_request.status != 'pending':
+                return Response({'detail': 'Only pending requests can be rejected.'}, status=status.HTTP_409_CONFLICT)
+            exam_request.status = 'rejected'
+            exam_request.reviewed_by = request.user
+            exam_request.reviewed_at = timezone.now()
+            exam_request.rejection_reason = reason
+            exam_request.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'rejection_reason', 'updated_at'])
+        return Response(self.get_serializer(exam_request).data)
+
+
 class AdminSubjectiveSubmissionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsEvaluatorUser]
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
@@ -366,8 +845,29 @@ class AdminSubjectiveSubmissionViewSet(viewsets.ModelViewSet):
                 db_models.Q(attempt__student__username__icontains=search) |
                 db_models.Q(attempt__student__email__icontains=search) |
                 db_models.Q(attempt__student__first_name__icontains=search) |
-                db_models.Q(attempt__student__last_name__icontains=search)
+                db_models.Q(attempt__student__last_name__icontains=search) |
+                db_models.Q(attempt__examination__title__icontains=search)
             )
+
+        student_id = self.request.query_params.get('student_id')
+        if student_id:
+            queryset = queryset.filter(attempt__student_id=student_id)
+
+        evaluation_status = self.request.query_params.get('evaluation_status')
+        if evaluation_status == 'pending':
+            queryset = queryset.filter(is_published=False, status__in=['submitted', 'processing', 'under_review'])
+        elif evaluation_status == 'evaluated':
+            queryset = queryset.filter(status='evaluated', is_published=False)
+        elif evaluation_status == 'published':
+            queryset = queryset.filter(is_published=True)
+
+        date_from = self.request.query_params.get('date_from')
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        date_to = self.request.query_params.get('date_to')
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+
         return queryset
 
     def get_serializer_class(self):
@@ -375,6 +875,30 @@ class AdminSubjectiveSubmissionViewSet(viewsets.ModelViewSet):
         if self.action in ['retrieve', 'by_attempt']:
             return AdminSubjectiveSubmissionDetailSerializer
         return AdminSubjectiveSubmissionListSerializer
+
+    def retrieve(self, request, *args, **kwargs):
+        from exams.models import SubjectiveSubmission
+        from exams.serializers import AdminSubjectiveSubmissionDetailSerializer
+        pk = kwargs.get('pk')
+        try:
+            submission = (
+                SubjectiveSubmission.objects
+                .select_related('attempt', 'attempt__student', 'attempt__examination', 'evaluator')
+                .prefetch_related('pages', 'question_scores')
+                .get(pk=pk)
+            )
+        except SubjectiveSubmission.DoesNotExist:
+            try:
+                submission = (
+                    SubjectiveSubmission.objects
+                    .select_related('attempt', 'attempt__student', 'attempt__examination', 'evaluator')
+                    .prefetch_related('pages', 'question_scores')
+                    .get(attempt_id=pk)
+                )
+            except SubjectiveSubmission.DoesNotExist:
+                return Response({'detail': f'Submission #{pk} not found.'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = AdminSubjectiveSubmissionDetailSerializer(submission)
+        return Response(serializer.data)
 
     @action(detail=False, methods=['get'], url_path='by-attempt/(?P<attempt_id>[^/.]+)')
     def by_attempt(self, request, attempt_id=None):
@@ -388,7 +912,16 @@ class AdminSubjectiveSubmissionViewSet(viewsets.ModelViewSet):
                 .get(attempt_id=attempt_id)
             )
         except SubjectiveSubmission.DoesNotExist:
-            return Response({'detail': f'Submission for attempt #{attempt_id} not found.'}, status=status.HTTP_404_NOT_FOUND)
+            # Fallback: if caller passed submission.id instead of attempt_id
+            try:
+                submission = (
+                    SubjectiveSubmission.objects
+                    .select_related('attempt', 'attempt__student', 'attempt__examination', 'evaluator')
+                    .prefetch_related('pages', 'question_scores')
+                    .get(id=attempt_id)
+                )
+            except SubjectiveSubmission.DoesNotExist:
+                return Response({'detail': f'Submission for attempt #{attempt_id} not found.'}, status=status.HTTP_404_NOT_FOUND)
         serializer = AdminSubjectiveSubmissionDetailSerializer(submission)
         return Response(serializer.data)
 

@@ -116,5 +116,10 @@ class SubjectivePdfService:
         page_count = max(1, content.count(b'/Type /Page\n') + content.count(b'/Type /Page\r') + content.count(b'/Type/Page'))
         total_bytes = len(content)
 
-        content_file = ContentFile(content, name="answer-sheet.pdf")
+        file_name = getattr(file_obj, 'name', None) or "answer-sheet.pdf"
+        base_name = os.path.basename(file_name)
+        if not base_name.lower().endswith('.pdf'):
+            base_name += '.pdf'
+
+        content_file = ContentFile(content, name=base_name)
         return content_file, page_count, total_bytes

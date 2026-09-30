@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
-import { studentExamsApi } from "@/lib/api/student-exams";
+import { studentExamsApi, StudentExam } from "@/lib/api/student-exams";
 import { LoksewaExamCountdown } from "@/components/student/countdown/LoksewaExamCountdown";
 import { MockExamCountdown } from "@/components/student/countdown/MockExamCountdown";
 import { useOptionalStudentContext } from "@/contexts/StudentContext";
@@ -36,31 +36,8 @@ const ExamSkeletonGrid = () => (
   </div>
 );
 
-const PastResultsSkeletonGrid = () => (
-  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-    {[1, 2, 3].map((i) => (
-      <Card key={i} className="border-border/60 flex flex-col animate-pulse">
-        <CardHeader className="space-y-3">
-          <div className="flex justify-between items-start">
-            <div className="h-5 w-16 bg-muted/60 rounded" />
-            <div className="h-4 w-24 bg-muted/40 rounded" />
-          </div>
-          <div className="h-6 w-3/4 bg-muted/70 rounded" />
-          <div className="h-4 w-1/3 bg-muted/50 rounded" />
-        </CardHeader>
-        <CardContent className="flex-1">
-          <div className="h-11 bg-muted/40 rounded-lg" />
-        </CardContent>
-        <CardFooter className="pt-4 border-t border-border/50">
-          <div className="h-10 w-full bg-muted/60 rounded" />
-        </CardFooter>
-      </Card>
-    ))}
-  </div>
-);
-
 export default function ExamsListingPage() {
-  const [activeTab, setActiveTab] = useState("old_past");
+  const [activeTab, setActiveTab] = useState("past_year");
   const studentCtx = useOptionalStudentContext();
   const effectiveCourseId = studentCtx?.activeCourse?.id;
   const isCtxLoading = studentCtx?.isLoading ?? false;
@@ -72,25 +49,17 @@ export default function ExamsListingPage() {
     staleTime: 60 * 1000,
   });
 
-  const { data: pastResultsData, isLoading: isLoadingPast } = useQuery({
-    queryKey: ['student-past-results'],
-    queryFn: studentExamsApi.getPastResults,
-    enabled: activeTab === 'past',
-    staleTime: 60 * 1000,
-  });
-
-  const activeExams: any[] = exams || [];
-  const pastExams = pastResultsData || [];
+  const activeExams: StudentExam[] = exams || [];
 
   // Group by effective_category — a Live Exam auto-promotes into the Model
   // Exams tab 48h after its scheduled start, so this reads the promoted
   // value rather than the raw admin-set category.
-  const oldPastExams = activeExams.filter(e => e.effective_category === "old_past");
+  const oldPastExams = activeExams.filter(e => e.effective_category === "past_year");
   const modelExams = activeExams.filter(e => e.effective_category === "model");
   const liveExams = activeExams.filter(e => e.effective_category === "live");
-  const subjectiveExams = activeExams.filter(e => e.exam_type === "subjective");
+  const topicwiseExams = activeExams.filter(e => e.effective_category === "topicwise" || (e.exam_type === "subject" && !!e.topic_id));
 
-  const ExamGrid = ({ list, emptyTitle, emptyBody }: { list: any[]; emptyTitle: string; emptyBody: string }) => {
+  const ExamGrid = ({ list, emptyTitle, emptyBody }: { list: StudentExam[]; emptyTitle: string; emptyBody: string }) => {
     if (isLoadingExams && !exams) {
       return <ExamSkeletonGrid />;
     }
@@ -111,7 +80,7 @@ export default function ExamsListingPage() {
 
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {list.map((exam: any) => (
+        {list.map((exam) => (
           <Card key={exam.id} className="border-border/60 flex flex-col hover:border-primary/30 transition-colors">
             <CardHeader>
               <div className="flex justify-between items-start mb-2">
@@ -174,9 +143,12 @@ export default function ExamsListingPage() {
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Mock Exams</h1>
           <p className="text-muted-foreground mt-1">Simulate the real examination environment.</p>
         </div>
-        <Button variant="outline" className="gap-2">
-          View Exam Syllabus
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/student/exams/request-subjective"><Button variant="outline">Request Subjective Live Exam</Button></Link>
+          <Link href="/student/results"><Button variant="outline">Past Results</Button></Link>
+          <Link href="/student/exams/custom-builder"><Button variant="outline">Create Your Own</Button></Link>
+          <Link href="/student/subjective"><Button variant="outline">Subjective Practice</Button></Link>
+        </div>
       </div>
 
       {/* Live & Upcoming Countdowns */}
@@ -187,18 +159,16 @@ export default function ExamsListingPage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="mb-6 flex-wrap h-auto">
-          <TabsTrigger value="old_past">Old Past Exams</TabsTrigger>
+          <TabsTrigger value="past_year">Past Year Paper</TabsTrigger>
           <TabsTrigger value="model">Model Exams</TabsTrigger>
           <TabsTrigger value="live">Live Exams</TabsTrigger>
-          <TabsTrigger value="subjective">Subjective Exams</TabsTrigger>
-          <TabsTrigger value="past">Past Results</TabsTrigger>
-          <TabsTrigger value="custom">Create Your Own</TabsTrigger>
+          <TabsTrigger value="topicwise">Topicwise Exam</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="old_past" className="space-y-6">
+        <TabsContent value="past_year" className="space-y-6">
           <ExamGrid
             list={oldPastExams}
-            emptyTitle="No Old Past Exams"
+            emptyTitle="No Past Year Papers"
             emptyBody="Original past papers will show up here once published."
           />
         </TabsContent>
@@ -219,86 +189,14 @@ export default function ExamsListingPage() {
           />
         </TabsContent>
 
-        <TabsContent value="subjective" className="space-y-6">
+        <TabsContent value="topicwise" className="space-y-6">
           <ExamGrid
-            list={subjectiveExams}
-            emptyTitle="No Subjective Exams"
-            emptyBody="Descriptive/written model exams will show up here once published."
+            list={topicwiseExams}
+            emptyTitle="No Topicwise Exams"
+            emptyBody="Published topic-focused examinations will appear here."
           />
         </TabsContent>
 
-        <TabsContent value="past" className="space-y-6">
-          {isLoadingPast && !pastResultsData ? (
-            <PastResultsSkeletonGrid />
-          ) : pastExams.length === 0 ? (
-            <Card className="border-border/60 border-dashed flex flex-col items-center justify-center p-12 text-center text-muted-foreground">
-              <CheckCircle className="h-10 w-10 mb-4 opacity-50" />
-              <h3 className="font-medium text-lg mb-1">No Past Results</h3>
-              <p className="text-sm">You haven't completed any exams yet.</p>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {pastExams.map((attempt: any) => (
-                <Card key={attempt.id} className="border-border/60 flex flex-col hover:border-primary/30 transition-colors">
-                  <CardHeader>
-                    <div className="flex justify-between items-start mb-2">
-                      {attempt.needs_evaluation ? (
-                        <Badge variant="outline" className="text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400">
-                          Evaluation Pending
-                        </Badge>
-                      ) : (
-                        <Badge variant={attempt.passed ? "default" : "destructive"}>
-                          {attempt.passed ? "PASSED" : "FAILED"}
-                        </Badge>
-                      )}
-                      <span className="text-xs text-muted-foreground font-medium">
-                        {new Date(attempt.submitted_at).toLocaleDateString()}
-                      </span>
-                    </div>
-                    <CardTitle className="text-xl line-clamp-2">{attempt.examination_title}</CardTitle>
-                    <CardDescription className="text-primary font-medium mt-1">
-                      {attempt.needs_evaluation
-                        ? "Awaiting evaluation from a teacher"
-                        : `Score: ${attempt.score} (${Math.round(attempt.percentage)}%)`}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="flex-1">
-                    <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground bg-muted/30 p-3 rounded-lg">
-                      <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
-                        <CheckCircle className="h-4 w-4" />
-                        <span>{attempt.correct_answers} Correct</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-destructive">
-                        <Target className="h-4 w-4" />
-                        <span>{attempt.wrong_answers} Wrong</span>
-                      </div>
-                    </div>
-                  </CardContent>
-                  <CardFooter className="pt-4 border-t border-border/50">
-                    <Link href={`/student/exams/${attempt.examination}/result/${attempt.id}`} className="w-full">
-                      <Button className="w-full gap-2" variant="outline">
-                        View Details
-                      </Button>
-                    </Link>
-                  </CardFooter>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
-        
-        <TabsContent value="custom">
-          <Card className="border-border/60 p-12 flex flex-col items-center justify-center text-center">
-            <Target className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium">Custom Exam Builder</h3>
-            <p className="text-muted-foreground max-w-sm mt-2">
-              Generate personalized mock exams based on your weak topics and preferred difficulty.
-            </p>
-            <Link href="/student/exams/custom-builder">
-              <Button className="mt-6">Launch Builder</Button>
-            </Link>
-          </Card>
-        </TabsContent>
       </Tabs>
     </div>
   );

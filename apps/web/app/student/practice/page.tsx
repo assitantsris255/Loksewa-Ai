@@ -1,331 +1,128 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import {
-  BookOpen, Play, Calendar, Zap, RefreshCw, Bookmark,
-  Target, Sparkles, LucideIcon
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { usePracticeExams, useRevisionSummary } from "@/lib/practice-hooks";
-import { ExamListStatus } from "@/components/practice/ExamListStatus";
-import { useRouter } from "next/navigation";
-import { useCalmDownGate } from "@/components/calm-down/useCalmDownGate";
+import { AlertCircle, ArrowRight, BookOpen, Bookmark, ClipboardList, Loader2, RefreshCw, Target, Zap } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { useRevisionSummary } from "@/lib/practice-hooks";
 
 export default function PracticeSetupPage() {
   const router = useRouter();
-  // Shared query cache: the same syllabus tree feeds Topic-wise Study, so
-  // moving between Practice screens doesn't refetch it.
-  const examsQuery = usePracticeExams();
-  const exams = useMemo(() => examsQuery.data ?? [], [examsQuery.data]);
-  const loading = examsQuery.isPending;
+  const summaryQuery = useRevisionSummary();
+  const summary = summaryQuery.data;
 
-  // "" until the authorised list arrives; there is deliberately no "all exams" choice.
-  const [exam, setExam] = useState("");
-  const [subject, setSubject] = useState("all");
-  const [topic, setTopic] = useState("all");
-  const [difficulty, setDifficulty] = useState("all");
-  const [questions, setQuestions] = useState("20");
-  const [mode, setMode] = useState("flexible");
-  const revision = useRevisionSummary().data ?? null;
-
-  useEffect(() => {
-    if (!exam && exams.length > 0 && exams[0]?.id) setExam(exams[0].id.toString());
-  }, [exams, exam]);
-
-  const sessionUrl = `/student/practice/session?exam=${exam}&subject=${subject}&topic=${topic}&diff=${difficulty}&q=${questions}&mode=${mode}`;
-  const { requestStart, gate } = useCalmDownGate(() => router.push(sessionUrl));
-
-  const handleStartPractice = () => {
-    // Flexible practice has no countdown timer to protect, so the Calm Down
-    // prompt is only offered ahead of Timed practice - matching "other timed
-    // sessions where appropriate" rather than interrupting every start.
-    if (mode === "timed") {
-      requestStart();
-    } else {
-      router.push(sessionUrl);
-    }
-  };
-
-  const activeExam = useMemo(() => exams.find(e => e.id.toString() === exam), [exam, exams]);
-  const activeSubject = useMemo(() => activeExam?.subjects?.find(s => s.id.toString() === subject), [activeExam, subject]);
-
-  const allTopics = useMemo(() => {
-    if (!activeSubject) return [];
-    return activeSubject.units?.flatMap(u => u.topics) || [];
-  }, [activeSubject]);
-
-  type QuickStart = {
-    id: string;
-    label: string;
-    icon: LucideIcon;
-    color: string;
-    bg: string;
-    onClick?: () => void;
-    comingSoon?: boolean;
-  };
-
-  const quickStarts: QuickStart[] = [
-    { id: "bookmark", label: "Saved Questions", icon: Bookmark, color: "text-primary dark:text-foreground", bg: "bg-primary/10", onClick: () => router.push("/student/practice/saved") },
-    { id: "random", label: "Random Practice", icon: Zap, color: "text-purple-500", bg: "bg-purple-500/10", onClick: () => router.push(`/student/practice/session?exam=all&subject=all&topic=all&diff=all&q=20&mode=flexible`) },
-    { id: "weak", label: "Weak Topics", icon: Target, color: "text-red-500", bg: "bg-red-500/10", onClick: () => router.push("/student/practice/revision?focus=weak_topics") },
-    { id: "incorrect", label: "Recently Incorrect", icon: RefreshCw, color: "text-orange-500", bg: "bg-orange-500/10", onClick: () => router.push("/student/practice/revision?focus=recent_mistakes") },
-    { id: "daily", label: "Daily Practice", icon: Calendar, color: "text-[#D4A72C]", bg: "bg-[#D4A72C]/10", onClick: () => router.push("/student/practice/daily") },
+  const quickStarts = [
+    {
+      id: "random",
+      label: "Random",
+      description: "Practice approved questions from your authorized Question Bank.",
+      count: null,
+      icon: Zap,
+      href: "/student/practice/session?quick=random&q=20",
+      tone: "text-sky-700 bg-sky-100 dark:text-sky-300 dark:bg-sky-950/50",
+    },
+    {
+      id: "weak",
+      label: "Weak Topic",
+      description: "Work on topics where your real answer history shows room to improve.",
+      count: summary?.weak_topics ?? null,
+      icon: Target,
+      href: "/student/practice/revision?focus=weak_topics",
+      tone: "text-rose-700 bg-rose-100 dark:text-rose-300 dark:bg-rose-950/50",
+    },
+    {
+      id: "saved",
+      label: "Saved Questions",
+      description: "Practice questions you have bookmarked while studying or taking exams.",
+      count: null,
+      icon: Bookmark,
+      href: "/student/practice/saved",
+      tone: "text-amber-700 bg-amber-100 dark:text-amber-300 dark:bg-amber-950/50",
+    },
+    {
+      id: "incorrect",
+      label: "Recently Incorrect",
+      description: "Revisit approved questions from your recent incorrect answers.",
+      count: summary?.recent_mistakes ?? null,
+      icon: RefreshCw,
+      href: "/student/practice/revision?focus=recent_mistakes",
+      tone: "text-teal-700 bg-teal-100 dark:text-teal-300 dark:bg-teal-950/50",
+    },
   ];
 
   return (
-    <div className="p-4 md:p-8 max-w-[1200px] mx-auto space-y-8 animate-in fade-in-50 duration-500">
-      
-      {/* HEADER */}
-      <div>
-        <h1 className="text-[28px] font-bold tracking-tight text-primary dark:text-foreground">Practice</h1>
-        <p className="text-muted-foreground mt-1 text-[15px]">Strengthen your preparation with focused objective practice.</p>
-      </div>
+    <main className="mx-auto max-w-[1050px] space-y-12 px-4 py-8 md:px-8 md:py-10">
+      <header className="border-b border-border pb-6">
+        <p className="text-xs font-bold uppercase text-muted-foreground">Student Portal</p>
+        <h1 className="mt-2 text-3xl font-bold text-primary dark:text-foreground">Practice</h1>
+      </header>
 
-      {/* MCQ STUDY ENTRY POINT — distinct from the scored quiz below: no
-          fixed count, no timer, browse a topic at your own pace. */}
-      <Link
-        href="/student/practice/study"
-        className="flex items-center justify-between gap-4 p-5 rounded-[14px] border border-[#D4A72C]/30 bg-[#D4A72C]/[0.06] hover:bg-[#D4A72C]/10 transition-all group"
-      >
-        <div className="flex items-center gap-4">
-          <div className="w-11 h-11 rounded-[10px] bg-[#D4A72C]/15 flex items-center justify-center shrink-0">
-            <BookOpen className="w-5 h-5 text-[#D4A72C]" />
-          </div>
+      <section aria-labelledby="quick-start-heading">
+        <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <div className="font-bold text-primary dark:text-foreground text-[15px]">Study by Topic</div>
-            <div className="text-[13px] text-muted-foreground">No timer, no fixed count — just learn at your own pace, with Show Answer whenever you want it.</div>
+            <h2 id="quick-start-heading" className="text-xl font-bold text-primary dark:text-foreground">Quick Start</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Practice instantly based on what you want to work on.</p>
           </div>
-        </div>
-        <span className="text-[#D4A72C] font-bold text-[14px] shrink-0 group-hover:translate-x-1 transition-transform">Start →</span>
-      </Link>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
-        {/* LEFT COLUMN - CONFIGURATION */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-card rounded-[16px] border border-border shadow-sm p-6 md:p-8">
-            <h2 className="text-[18px] font-bold text-primary dark:text-foreground mb-6 flex items-center gap-2">
-              <SettingsIcon /> Choose your practice
-            </h2>
-
-            <div className="space-y-6">
-              
-              {/* Exam & Subject */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div className="space-y-2">
-                  <label className="text-[13px] font-bold text-muted-foreground uppercase tracking-wider block">Exam</label>
-                  <select 
-                    value={exam} 
-                    onChange={(e) => { setExam(e.target.value); setSubject("all"); setTopic("all"); }}
-                    className="w-full h-12 px-3 bg-muted border border-border rounded-[10px] text-[15px] font-medium text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary dark:focus:border-[#D4A72C] dark:focus:ring-[#D4A72C]"
-                  >
-                    {exams.map(e => (
-                      <option key={e.id} value={e.id}>{e.display_name ?? e.title}</option>
-                    ))}
-                  </select>
-                  <ExamListStatus
-                    isError={examsQuery.isError}
-                    isEmpty={!loading && !examsQuery.isError && exams.length === 0}
-                    onRetry={() => examsQuery.refetch()}
-                  />
-                </div>
-                
-                <div className="space-y-2">
-                  <label className="text-[13px] font-bold text-muted-foreground uppercase tracking-wider block">Subject</label>
-                  <select 
-                    value={subject} 
-                    onChange={(e) => { setSubject(e.target.value); setTopic("all"); }}
-                    className="w-full h-12 px-3 bg-muted border border-border rounded-[10px] text-[15px] font-medium text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary dark:focus:border-[#D4A72C] dark:focus:ring-[#D4A72C]"
-                    disabled={!activeExam}
-                  >
-                    <option value="all">All Subjects</option>
-                    {activeExam?.subjects?.map(s => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Topic & Difficulty */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div className="space-y-2">
-                  <label className="text-[13px] font-bold text-muted-foreground uppercase tracking-wider block">Topic</label>
-                  <select 
-                    value={topic} 
-                    onChange={(e) => setTopic(e.target.value)}
-                    className="w-full h-12 px-3 bg-muted border border-border rounded-[10px] text-[15px] font-medium text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary dark:focus:border-[#D4A72C] dark:focus:ring-[#D4A72C]"
-                    disabled={!activeSubject}
-                  >
-                    <option value="all">All Topics</option>
-                    {allTopics.map(t => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
-                
-                <div className="space-y-2">
-                  <label className="text-[13px] font-bold text-muted-foreground uppercase tracking-wider block">Difficulty</label>
-                  <select 
-                    value={difficulty} 
-                    onChange={(e) => setDifficulty(e.target.value)}
-                    className="w-full h-12 px-3 bg-muted border border-border rounded-[10px] text-[15px] font-medium text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary dark:focus:border-[#D4A72C] dark:focus:ring-[#D4A72C]"
-                  >
-                    <option value="all">All Levels</option>
-                    <option value="easy">Easy</option>
-                    <option value="medium">Medium</option>
-                    <option value="hard">Hard</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Number of Questions */}
-              <div className="space-y-3 pt-2">
-                <label className="text-[13px] font-bold text-muted-foreground uppercase tracking-wider block">Number of Questions</label>
-                <div className="flex flex-wrap gap-3">
-                  {["10", "20", "30", "50", "100"].map((num) => (
-                    <label key={num} className="relative cursor-pointer">
-                      <input 
-                        type="radio" 
-                        name="questions" 
-                        value={num}
-                        checked={questions === num}
-                        onChange={(e) => setQuestions(e.target.value)}
-                        className="peer sr-only" 
-                      />
-                      <div className="flex items-center justify-center h-11 px-5 rounded-[10px] border border-border bg-card text-[15px] font-semibold text-muted-foreground transition-all peer-checked:border-primary peer-checked:bg-primary peer-checked:text-primary-foreground hover:bg-muted peer-checked:hover:bg-primary">
-                        {num}
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Practice Mode */}
-              <div className="space-y-3 pt-2">
-                <label className="text-[13px] font-bold text-muted-foreground uppercase tracking-wider block">Practice Mode</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <label className="relative cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="mode" 
-                      value="flexible"
-                      checked={mode === "flexible"}
-                      onChange={(e) => setMode(e.target.value)}
-                      className="peer sr-only" 
-                    />
-                    <div className="flex flex-col p-4 rounded-[12px] border-2 border-border bg-card transition-all peer-checked:border-[#D4A72C] peer-checked:bg-[#D4A72C]/10 hover:bg-muted">
-                      <span className="font-bold text-primary dark:text-foreground text-[15px] mb-1">Flexible Practice</span>
-                      <span className="text-[13px] text-muted-foreground font-medium">Take your time, no strict countdown. Best for learning.</span>
-                    </div>
-                  </label>
-                  
-                  <label className="relative cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="mode" 
-                      value="timed"
-                      checked={mode === "timed"}
-                      onChange={(e) => setMode(e.target.value)}
-                      className="peer sr-only" 
-                    />
-                    <div className="flex flex-col p-4 rounded-[12px] border-2 border-border bg-card transition-all peer-checked:border-primary peer-checked:bg-muted hover:bg-muted">
-                      <span className="font-bold text-primary dark:text-foreground text-[15px] mb-1">Timed Practice</span>
-                      <span className="text-[13px] text-muted-foreground font-medium">Simulate exam pressure with a strict countdown timer.</span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-
-            </div>
-          </div>
-
-          <Button
-            onClick={handleStartPractice}
-            disabled={loading || !exam}
-            className="w-full h-14 rounded-[12px] bg-primary text-primary-foreground hover:bg-[#163E6B] text-white font-bold text-[16px] shadow-[0_8px_20px_rgba(11,37,69,0.2)] transition-all hover:-translate-y-0.5 group"
-          >
-            {loading ? "Loading..." : "Start Practice"}
-            <Play className="w-5 h-5 ml-2 fill-white/20 group-hover:translate-x-1 transition-transform" />
-          </Button>
-
+          {summaryQuery.isLoading && <span className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading practice options...</span>}
         </div>
 
-        {/* RIGHT COLUMN - SMART OPTIONS */}
-        <div className="space-y-6">
-          <div className="bg-card rounded-[16px] border border-border shadow-sm p-6">
-            <h3 className="text-[14px] font-bold text-muted-foreground uppercase tracking-wider mb-5 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[#D4A72C]" /> Quick Start
-            </h3>
-            <div className="space-y-3">
-              {quickStarts.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={item.onClick}
-                  disabled={item.comingSoon}
-                  className={`w-full flex items-center gap-4 p-4 rounded-[12px] border border-border/50 bg-card transition-all group text-left ${
-                    item.comingSoon ? "opacity-50 cursor-not-allowed" : "hover:border-border hover:bg-muted"
-                  }`}
-                >
-                  <div className={`w-10 h-10 rounded-[8px] flex items-center justify-center ${item.bg} shrink-0`}>
-                    <item.icon className={`w-5 h-5 ${item.color}`} strokeWidth={2} />
-                  </div>
-                  <div>
-                    <div className="font-semibold text-primary dark:text-foreground text-[14px]">{item.label}</div>
-                    {item.comingSoon && (
-                      <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mt-0.5">Coming soon</div>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </div>
+        {summaryQuery.isError && (
+          <div className="mb-3 flex items-center gap-3 border-y border-red-200 py-3 text-sm text-red-700 dark:border-red-900 dark:text-red-300" role="alert">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span className="flex-1">Could not load your performance counts.</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => summaryQuery.refetch()}>Retry</Button>
           </div>
+        )}
 
-          <div className="bg-gradient-to-br from-[#0B2545] to-[#163E6B] rounded-[16px] shadow-sm p-6 text-white">
-            <h3 className="font-bold text-[16px] mb-2 flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-[#D4A72C]" /> Revision Mode
-            </h3>
-            {revision === null ? (
-              <p className="text-[13px] text-white/70 font-medium">Loading your revision queue...</p>
-            ) : revision.total_available > 0 ? (
-              <>
-                <p className="text-[13px] text-white/80 font-medium leading-relaxed">
-                  We picked <strong>{revision.total_available}</strong> question{revision.total_available === 1 ? "" : "s"} for you to revise, based on mistakes, weak topics, and what&apos;s due for another look.
-                </p>
-                <Button
-                  onClick={() => router.push("/student/practice/revision")}
-                  className="w-full mt-4 bg-[#D4A72C] text-[#0A1118] hover:bg-[#b58e23] font-bold h-10 rounded-[8px]"
-                >
-                  Start Revising
-                </Button>
-              </>
-            ) : (
-              <p className="text-[13px] text-white/80 font-medium leading-relaxed">
-                Nothing to revise yet. As you practice, we&apos;ll build a queue here from what you get wrong and what&apos;s due for review.
-              </p>
-            )}
-          </div>
+        <div className="divide-y divide-border border-y border-border">
+          {quickStarts.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => router.push(item.href)}
+              className="group flex w-full items-center gap-4 py-5 text-left transition-colors hover:bg-muted/40"
+            >
+              <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] ${item.tone}`}>
+                <item.icon className="h-5 w-5" aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold text-primary dark:text-foreground">{item.label}</span>
+                <span className="mt-0.5 block text-sm text-muted-foreground">{item.description}</span>
+              </span>
+              {item.count !== null && (
+                <span className="min-w-8 text-right text-sm font-semibold tabular-nums text-muted-foreground">
+                  {item.count}
+                </span>
+              )}
+              <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-1" aria-hidden="true" />
+            </button>
+          ))}
         </div>
+      </section>
 
-      </div>
-
-      {gate}
-    </div>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 20V10" stroke="#0B2545" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M12 4V6" stroke="#0B2545" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M18 20V16" stroke="#0B2545" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M18 8V4" stroke="#0B2545" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M6 20V16" stroke="#0B2545" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M6 8V4" stroke="#0B2545" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <circle cx="12" cy="8" r="2" stroke="#0B2545" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <circle cx="18" cy="12" r="2" stroke="#0B2545" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <circle cx="6" cy="12" r="2" stroke="#0B2545" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-    </svg>
+      <section aria-labelledby="topicwise-heading">
+        <div className="mb-5 border-b border-border pb-4">
+          <h2 id="topicwise-heading" className="text-xl font-bold text-primary dark:text-foreground">Topicwise Practice</h2>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Link href="/student/practice/study" className="group flex min-h-32 items-center gap-4 border border-border p-5 transition-colors hover:bg-muted/40">
+            <BookOpen className="h-6 w-6 shrink-0 text-amber-600" aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              <span className="block font-semibold text-primary dark:text-foreground">Topicwise Study</span>
+              <span className="mt-1 block text-sm text-muted-foreground">Learn at your own pace. No timer, no fixed count, answers available while studying.</span>
+            </span>
+            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-1" aria-hidden="true" />
+          </Link>
+          <Link href="/student/practice/tests" className="group flex min-h-32 items-center gap-4 border border-border p-5 transition-colors hover:bg-muted/40">
+            <ClipboardList className="h-6 w-6 shrink-0 text-sky-700" aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              <span className="block font-semibold text-primary dark:text-foreground">Topicwise Test</span>
+              <span className="mt-1 block text-sm text-muted-foreground">Take an admin-created test with a fixed question set and strict timer.</span>
+            </span>
+            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-1" aria-hidden="true" />
+          </Link>
+        </div>
+      </section>
+    </main>
   );
 }

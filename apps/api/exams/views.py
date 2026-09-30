@@ -18,18 +18,37 @@ RECENT_MISTAKE_WINDOW_DAYS = 7
 REVISION_SESSION_SIZE = 20
 
 
-def _revision_buckets(user):
+def _practice_exam_scope(user, course_id=None):
+    """Resolve practice content to the student's active or requested course."""
+    from courses.access import authorized_courses, authorized_exam_ids, get_course_exam_ids, get_student_course_context
+    from courses.models import Course
+
+    if course_id in (None, '') and getattr(user, 'role', None) == 'student':
+        active_course = get_student_course_context(user).get('active_course')
+        course_id = active_course.get('id') if active_course else None
+
+    if course_id not in (None, ''):
+        try:
+            course_id = int(course_id)
+        except (TypeError, ValueError):
+            return set()
+        courses = authorized_courses(user) if getattr(user, 'role', None) == 'student' else Course.objects.filter(status='published')
+        course = courses.filter(id=course_id, status='published').first()
+        return get_course_exam_ids(course) if course else set()
+
+    return authorized_exam_ids(user)
+
+
+def _revision_buckets(user, course_id=None):
     """Group the user's QuestionMastery history into the signals Revision
     Mode is built on. Never reads Bookmark — saving a question must never
     be mistaken for a weakness signal."""
     from django.utils import timezone
     from django.db.models import Sum
 
-    from courses.access import authorized_exam_ids
-
     now = timezone.now()
     service = QuestionSelectionService()
-    scope = authorized_exam_ids(user)
+    scope = _practice_exam_scope(user, course_id)
     pool = service.get_base_queryset()
     if scope is not None:
         # Revision draws on the student's own history, but only from exams
@@ -69,6 +88,57 @@ def _revision_buckets(user):
     }
 
 
+def _recently_incorrect_questions(user, exam_ids):
+    """Return recently incorrect approved questions, using persisted answer history."""
+    from django.utils import timezone
+    from .models import ExaminationAttempt, StudentAnswer
+
+    since = timezone.now() - timezone.timedelta(days=RECENT_MISTAKE_WINDOW_DAYS)
+    service = QuestionSelectionService()
+    eligible = service.apply_filters(service.get_base_queryset(), exam_ids=exam_ids)
+    eligible_ids = eligible.values_list('id', flat=True)
+    latest = {}
+
+    def record(question_id, attempted_at, is_correct):
+        if attempted_at and (question_id not in latest or attempted_at >= latest[question_id][0]):
+            latest[question_id] = (attempted_at, is_correct)
+
+    for question_id, attempted_at in QuestionMastery.objects.filter(
+        user=user,
+        question_id__in=eligible_ids,
+        consecutive_incorrect__gte=1,
+        last_attempted_at__gte=since,
+    ).values_list('question_id', 'last_attempted_at'):
+        record(question_id, attempted_at, False)
+
+    for question_id, attempted_at, is_correct in QuestionAttempt.objects.filter(
+        session__user=user,
+        viewed_at__gte=since,
+        question_id__in=eligible_ids,
+    ).exclude(selected_option__isnull=True).exclude(selected_option='').values_list(
+        'question_id', 'viewed_at', 'is_correct'
+    ):
+        record(question_id, attempted_at, is_correct)
+
+    for question_id, attempted_at, is_correct in StudentAnswer.objects.filter(
+        attempt__student=user,
+        attempt__status__in=('submitted', 'evaluated'),
+        attempt__submitted_at__gte=since,
+        question_id__in=eligible_ids,
+    ).exclude(selected_option__isnull=True).exclude(selected_option='').values_list(
+        'question_id', 'attempt__submitted_at', 'is_correct'
+    ):
+        record(question_id, attempted_at, is_correct)
+
+    ordered_ids = [
+        question_id for question_id, (_at, correct) in
+        sorted(latest.items(), key=lambda item: item[1][0], reverse=True)
+        if not correct
+    ]
+    questions_by_id = {question.id: question for question in eligible.filter(id__in=ordered_ids)}
+    return [questions_by_id[question_id] for question_id in ordered_ids if question_id in questions_by_id]
+
+
 def _dedup_questions(mastery_records, limit=None):
     seen = set()
     questions = []
@@ -104,8 +174,10 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         from django.db.models import Prefetch
-        from courses.access import authorized_exam_ids
+        from courses.access import authorized_courses, authorized_exam_ids, get_course_exam_ids
         from .models import Paper, Chapter
+        from courses.models import Course
+
         # The response nests exam -> subjects -> chapters -> topics. Without
         # prefetching, every level ran one query per parent (8 chapter and 8
         # topic queries here, 16 for subjects) - and each round trip to the
@@ -117,6 +189,25 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
                 ))
             ))
         ).order_by('category_id', 'order', 'id')
+
+        course_id = self.request.query_params.get('course_id')
+        if course_id is not None:
+            try:
+                course_id = int(course_id)
+            except (TypeError, ValueError):
+                return Exam.objects.none()
+
+            if self.request.user.role in ('teacher', 'admin', 'super-admin'):
+                course = Course.objects.filter(id=course_id, status='published').first()
+            else:
+                course = authorized_courses(self.request.user).filter(id=course_id, status='published').first()
+
+            if course is None:
+                return Exam.objects.none()
+
+            exam_ids = get_course_exam_ids(course)
+            return qs.filter(id__in=exam_ids) if exam_ids else Exam.objects.none()
+
         scope = authorized_exam_ids(self.request.user)
         return qs if scope is None else qs.filter(id__in=scope)
 
@@ -213,7 +304,7 @@ OPTION_LETTERS = ('a', 'b', 'c', 'd')
 # Modes that reveal correctness the moment a question is answered. Their
 # first answer is final (the UI locks the question); flexible/timed sessions
 # are scored at submit, so the student may change an answer until then.
-IMMEDIATE_FEEDBACK_MODES = ('study', 'revision', 'daily')
+IMMEDIATE_FEEDBACK_MODES = ('study', 'revision', 'daily', 'saved')
 
 
 def _note_study_activity(user):
@@ -315,9 +406,18 @@ def _study_page_payload(session, page, page_size, extra=None):
     page_attempts = list(
         attempts_qs.select_related('question').order_by('id')[offset:offset + page_size]
     )
+    canonical_numbers = {
+        question_id: index + 1
+        for index, question_id in enumerate(
+            attempts_qs.order_by('question_id').values_list('question_id', flat=True)
+        )
+    }
+    questions_data = SecureQuestionSerializer([a.question for a in page_attempts], many=True).data
+    for question in questions_data:
+        question['canonical_number'] = canonical_numbers[question['id']]
     payload = {
         'session': PracticeSessionSummarySerializer(session).data,
-        'questions': SecureQuestionSerializer([a.question for a in page_attempts], many=True).data,
+        'questions': questions_data,
         'attempts': [_attempt_state(a) for a in page_attempts],
         'page': page,
         'page_size': page_size,
@@ -342,9 +442,13 @@ def _new_study_page_payload(session, question_ids, page, page_size):
     page_ids = question_ids[offset:offset + page_size]
     by_id = {q.id: q for q in Question.objects.filter(id__in=page_ids)}
     questions = [by_id[i] for i in page_ids if i in by_id]
+    canonical_numbers = {question_id: index + 1 for index, question_id in enumerate(sorted(question_ids))}
+    questions_data = SecureQuestionSerializer(questions, many=True).data
+    for question in questions_data:
+        question['canonical_number'] = canonical_numbers[question['id']]
     return {
         'session': PracticeSessionSummarySerializer(session).data,
-        'questions': SecureQuestionSerializer(questions, many=True).data,
+        'questions': questions_data,
         'attempts': [
             {'question_id': q.id, 'selected_option': None, 'is_correct': None, 'is_viewed': False}
             for q in questions
@@ -407,31 +511,36 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
         tag_id = request.data.get('tag')
 
         # Enforce Enrollment Access Control
-        # If a course is provided, ensure the student is enrolled.
+        if not course_id and request.user.role == 'student':
+            from courses.access import get_student_course_context
+            active_course = get_student_course_context(request.user).get('active_course')
+            course_id = active_course.get('id') if active_course else None
+
+        exam_filter_ids = None
         if course_id:
             from courses.access import course_access_denial
             from courses.models import Course
+            from courses.access import get_course_exam_ids
             denial = course_access_denial(request.user, course_id)
             if denial:
                 return Response({'detail': denial[1]}, status=denial[0])
-            # Override exam_id with the course's exam if applicable
             course = Course.objects.get(id=course_id)
-            if course.exam:
-                exam_id = course.exam.id
-        elif not exam_id and request.user.role == 'student':
-            from courses.access import get_student_course_context
-            ctx = get_student_course_context(request.user)
-            active_c = ctx.get('active_course')
-            if active_c and active_c.get('exam_id'):
-                exam_id = active_c['exam_id']
+            exam_filter_ids = get_course_exam_ids(course)
+            if exam_id and str(exam_id) != 'all':
+                try:
+                    if int(exam_id) not in exam_filter_ids:
+                        return Response({'detail': "This exam is not part of the selected course."}, status=403)
+                except (TypeError, ValueError):
+                    return Response({'detail': 'Invalid exam.'}, status=400)
+            else:
+                exam_id = None
 
         # Exam authorisation. The client's exam id is never trusted: a student
         # may only name an exam their purchase covers, and "all" (or no exam)
         # means "all of MY authorised exams", never the whole platform.
         from courses.access import authorized_exam_ids
         scope = authorized_exam_ids(request.user)
-        exam_filter_ids = None
-        if scope is not None:
+        if exam_filter_ids is None and scope is not None:
             if exam_id and str(exam_id) != 'all':
                 try:
                     exam_authorised = int(exam_id) in scope
@@ -477,11 +586,14 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
         # Resolve exam_id for session record
         resolved_exam_id = exam_id if exam_id and str(exam_id) != 'all' else None
         if not resolved_exam_id:
-            if scope:
-                resolved_exam_id = min(scope)
-            else:
-                first_exam = Exam.objects.first()
-                resolved_exam_id = first_exam.id if first_exam else None
+            first_question = questions[0]
+            if first_question.topic_id:
+                resolved_exam_id = first_question.topic.chapter.subject.paper.exam_id
+            elif first_question.subject_id:
+                resolved_exam_id = first_question.subject.paper.exam_id
+            if not resolved_exam_id:
+                available_scope = exam_filter_ids if exam_filter_ids is not None else scope
+                resolved_exam_id = min(available_scope) if available_scope else None
 
         # Create session
         session = PracticeSession.objects.create(
@@ -583,12 +695,12 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
                     is_correct = bool(correct_option) and selected_option.upper() == correct_option.upper()
                     attempt.is_correct = is_correct
 
-                    # Study/Revision are no-pressure modes without a formal
-                    # submit step, so score the answer as soon as it's given -
+                    # Study/Revision/Saved are no-pressure modes, so score the
+                    # answer as soon as it's given -
                     # this is also the single point that feeds Revision Mode's
                     # performance signals (never fed by merely viewing a
                     # question or by Bookmark/Saved Questions).
-                    if session.mode in ('study', 'revision'):
+                    if session.mode in ('study', 'revision', 'saved'):
                         mastery, _ = QuestionMastery.objects.get_or_create(user=session.user, question=question)
                         mastery.record_answer(is_correct)
 
@@ -652,16 +764,22 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
         subject_id = request.data.get('subject')
         exam_id = request.data.get('exam')
         restart = bool(request.data.get('restart', False))
+        shuffle_questions = bool(request.data.get('shuffle_questions', False))
         page, page_size = _clean_page_params(request.data.get('page'), request.data.get('page_size'))
 
         if not topic_id:
             return Response({'detail': 'topic is required.'}, status=400)
 
+        course_id = request.data.get('course')
+        if not course_id and request.user.role == 'student':
+            from courses.access import get_student_course_context
+            active_course = get_student_course_context(request.user).get('active_course')
+            course_id = active_course.get('id') if active_course else None
+
         # Exam authorisation (students): the exam the client names must be one
         # their purchase covers, and it is what constrains the question pool
         # below - so a topic id from another exam yields nothing.
-        from courses.access import authorized_exam_ids
-        scope = authorized_exam_ids(request.user)
+        scope = _practice_exam_scope(request.user, course_id)
         if scope is not None:
             if not exam_id or str(exam_id) == 'all':
                 # No exam named: the topic itself says which exam it belongs to.
@@ -680,7 +798,6 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
         # Course-scoped study: the same enrollment/published check as create(),
         # and the topic must belong to the course's exam - the client can't
         # pair an authorised course id with somebody else's topic.
-        course_id = request.data.get('course')
         if course_id:
             from courses.access import course_access_denial
             from courses.models import Course
@@ -732,7 +849,7 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
                         exam_id=exam_id if exam_id and str(exam_id) != 'all' else None,
                         subject_id=subject_id if subject_id and str(subject_id) != 'all' else None,
                         topic_id=topic_id,
-                        limit=500,  # effectively "every approved question in this topic"
+                        limit=None,
                         # Written-answer questions (all of Question.SUBJECTIVE_TYPES,
                         # not just 'subjective') have no options / correct_option and
                         # belong to the subjective-answer system - they can't be shown
@@ -741,6 +858,9 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
                     )
                     if not question_ids:
                         return Response({'detail': 'No approved questions are available for this topic yet.'}, status=400)
+                    if shuffle_questions:
+                        import random
+                        random.shuffle(question_ids)
 
                     resolved_exam_id = exam_id if exam_id and str(exam_id) != 'all' else None
                     if not resolved_exam_id:
@@ -753,6 +873,7 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
                         subject_id=subject_id if subject_id and str(subject_id) != 'all' else None,
                         topic_id=topic_id,
                         mode='study',
+                        shuffle_questions=shuffle_questions,
                         total_questions=len(question_ids),
                     )
                     # One INSERT for the whole set (a topic can hold 100+
@@ -779,11 +900,77 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
         page, page_size = _clean_page_params(request.query_params.get('page', 1), request.query_params.get('page_size'))
         return Response(_study_page_payload(self.get_object(), page or 1, page_size))
 
+    @action(detail=False, methods=['post'])
+    def saved(self, request):
+        """Start or resume a paged session over the student's saved questions."""
+        from django.db import transaction
+        from django.db.models import F
+        from core.models import User
+        from .models import Bookmark
+
+        course_id = request.data.get('course_id')
+        scope = _practice_exam_scope(request.user, course_id)
+        service = QuestionSelectionService()
+        eligible = service.apply_filters(
+            service.get_base_queryset(), exam_ids=scope, question_type='objective'
+        )
+        saved_ids = list(
+            Bookmark.objects.filter(user=request.user, question_id__in=eligible.values_list('id', flat=True))
+            .order_by(F('custom_order').asc(nulls_last=True), 'created_at', 'id')
+            .values_list('question_id', flat=True)
+        )
+        if not saved_ids:
+            return Response({'detail': 'No saved questions are available for this course yet.'}, status=400)
+
+        page, page_size = _clean_page_params(request.data.get('page'), request.data.get('page_size'))
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            sessions = PracticeSession.objects.filter(
+                user=request.user, mode='saved', completed=False
+            )
+            if scope is not None:
+                sessions = sessions.filter(exam_id__in=scope)
+            session = sessions.order_by('-created_at').first()
+            if session and request.data.get('restart'):
+                session.delete()
+                session = None
+
+            if session:
+                payload = _study_page_payload(session, page, page_size, extra={'resumed': True})
+            else:
+                first_question = Question.objects.select_related(
+                    'topic__chapter__subject__paper__exam', 'subject__paper__exam'
+                ).filter(pk=saved_ids[0]).first()
+                exam_id = (
+                    first_question.topic.chapter.subject.paper.exam_id
+                    if first_question and first_question.topic_id else
+                    first_question.subject.paper.exam_id
+                    if first_question and first_question.subject_id else None
+                )
+                if not exam_id:
+                    return Response({'detail': 'Saved questions are missing their academic exam context.'}, status=400)
+                session = PracticeSession.objects.create(
+                    user=request.user,
+                    exam_id=exam_id,
+                    mode='saved',
+                    total_questions=len(saved_ids),
+                )
+                QuestionAttempt.objects.bulk_create([
+                    QuestionAttempt(session=session, question_id=question_id)
+                    for question_id in saved_ids
+                ])
+                payload = _new_study_page_payload(session, saved_ids, page, page_size)
+
+        return Response(payload)
+
     @action(detail=False, methods=['get'])
     def revision_summary(self, request):
         """Counts behind each Revision Mode signal, without starting a session."""
         from django.core.cache import cache
-        cache_key = f'student_rev_summary:{request.user.id}'
+        course_id = request.query_params.get('course_id')
+        scope = _practice_exam_scope(request.user, course_id)
+        scope_key = 'all' if scope is None else ','.join(str(value) for value in sorted(scope))
+        cache_key = f'student_rev_summary:{request.user.id}:{scope_key}'
         try:
             cached = cache.get(cache_key)
             if cached is not None:
@@ -791,14 +978,16 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
         except Exception:
             pass
 
-        buckets = _revision_buckets(request.user)
+        buckets = _revision_buckets(request.user, course_id)
         all_records = buckets['overdue'] + buckets['repeatedly_incorrect'] + buckets['recent_mistakes'] + buckets['weak_topics']
+        recent_questions = _recently_incorrect_questions(request.user, scope)
+        recent_ids = {question.id for question in recent_questions}
         data = {
             'overdue': len({m.question_id for m in buckets['overdue']}),
             'repeatedly_incorrect': len({m.question_id for m in buckets['repeatedly_incorrect']}),
-            'recent_mistakes': len({m.question_id for m in buckets['recent_mistakes']}),
+            'recent_mistakes': len(recent_ids),
             'weak_topics': len({m.question_id for m in buckets['weak_topics']}),
-            'total_available': len({m.question_id for m in all_records}),
+            'total_available': len({m.question_id for m in all_records} | recent_ids),
         }
         try:
             cache.set(cache_key, data, 30)
@@ -818,26 +1007,55 @@ class PracticeSessionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
         from courses.access import authorized_exam_ids
 
         focus = request.data.get('focus')
-        buckets = _revision_buckets(request.user)
-        order = ['overdue', 'repeatedly_incorrect', 'recent_mistakes', 'weak_topics']
-        if focus in order:
-            order.remove(focus)
-            order.insert(0, focus)
+        course_id = request.data.get('course_id')
+        scope = _practice_exam_scope(request.user, course_id)
+        buckets = _revision_buckets(request.user, course_id)
 
-        # Build a question → signal mapping so the frontend knows why each
-        # question appears (e.g. "Due for review", "Repeated mistake")
-        question_signal: dict[int, str] = {}
-        ordered_records = []
-        for key in order:
-            for m in buckets[key]:
-                if m.question_id not in question_signal:
-                    question_signal[m.question_id] = key
-            ordered_records += buckets[key]
-        questions = _dedup_questions(ordered_records, limit=REVISION_SESSION_SIZE)
+        if focus == 'weak_topics':
+            weak_topic_ids = sorted({
+                record.question.topic_id
+                for record in buckets['weak_topics']
+                if record.question.topic_id
+            })
+            selected = QuestionSelectionService().select(
+                exam_ids=scope,
+                topic_ids=weak_topic_ids,
+                count=REVISION_SESSION_SIZE,
+                randomize=True,
+                question_type='objective',
+            )
+            questions = selected['questions']
+            question_signal = {question.id: 'weak_topics' for question in questions}
+            ordered_records = []
+        elif focus == 'recent_mistakes':
+            questions = _recently_incorrect_questions(request.user, scope)
+            question_signal = {question.id: 'recent_mistakes' for question in questions}
+            ordered_records = []
+        else:
+            question_signal: dict[int, str] = {}
+            ordered_records = []
+            order = ['overdue', 'repeatedly_incorrect', 'recent_mistakes', 'weak_topics']
+            if focus in order:
+                order.remove(focus)
+                order.insert(0, focus)
+
+            for key in order:
+                for record in buckets[key]:
+                    if record.question_id not in question_signal:
+                        question_signal[record.question_id] = key
+                ordered_records += buckets[key]
+            questions = _dedup_questions(ordered_records, limit=REVISION_SESSION_SIZE)
 
         if not questions:
+            detail = (
+                'No weak topics are available yet. Complete some practice to build your performance profile.'
+                if focus == 'weak_topics' else
+                'No recently incorrect questions. Keep practicing and this list will update automatically.'
+                if focus == 'recent_mistakes' else
+                "No revision questions yet — keep practicing and we'll build your revision queue from what you get wrong."
+            )
             return Response(
-                {'detail': "No revision questions yet — keep practicing and we'll build your revision queue from what you get wrong."},
+                {'detail': detail},
                 status=400
             )
 
@@ -1172,10 +1390,49 @@ class BookmarkViewSet(viewsets.ModelViewSet):
     serializer_class = BookmarkSerializer
 
     def get_queryset(self):
-        return self.Bookmark.objects.filter(user=self.request.user).order_by('-created_at')
+        from django.db.models import F
+        scope = _practice_exam_scope(self.request.user, self.request.query_params.get('course_id'))
+        eligible = QuestionSelectionService().apply_filters(
+            QuestionSelectionService().get_base_queryset(), exam_ids=scope
+        )
+        return self.Bookmark.objects.filter(
+            user=self.request.user,
+            question_id__in=eligible.values_list('id', flat=True),
+        ).order_by(F('custom_order').asc(nulls_last=True), 'created_at', 'id')
+
+    @action(detail=False, methods=['patch'], url_path='order')
+    def set_order(self, request):
+        bookmark_ids = request.data.get('bookmark_ids')
+        if not isinstance(bookmark_ids, list) or not bookmark_ids:
+            return Response({'detail': 'bookmark_ids must be a non-empty list.'}, status=400)
+
+        bookmarks = list(self.get_queryset())
+        by_id = {bookmark.id: bookmark for bookmark in bookmarks}
+        try:
+            requested_ids = [int(bookmark_id) for bookmark_id in bookmark_ids]
+        except (TypeError, ValueError):
+            return Response({'detail': 'bookmark_ids must contain valid bookmark IDs.'}, status=400)
+        if len(set(requested_ids)) != len(requested_ids) or set(requested_ids) != set(by_id):
+            return Response({'detail': 'Order must include each authorized saved question exactly once.'}, status=400)
+
+        for order, bookmark_id in enumerate(requested_ids, start=1):
+            by_id[bookmark_id].custom_order = order
+        self.Bookmark.objects.bulk_update(bookmarks, ['custom_order'])
+        return Response({'status': 'ordered', 'count': len(bookmarks)})
+
+    @action(detail=False, methods=['post'], url_path='reset-order')
+    def reset_order(self, request):
+        count = self.get_queryset().update(custom_order=None)
+        return Response({'status': 'reset', 'count': count})
 
     def create(self, request, *args, **kwargs):
         question_id = request.data.get('question_id')
+        scope = _practice_exam_scope(request.user, request.data.get('course_id'))
+        eligible = QuestionSelectionService().apply_filters(
+            QuestionSelectionService().get_base_queryset(), exam_ids=scope
+        )
+        if not question_id or not eligible.filter(id=question_id).exists():
+            return Response({'detail': 'This question is not available in your authorized course.'}, status=404)
         bookmark, created = self.Bookmark.objects.get_or_create(user=request.user, question_id=question_id)
         if not created:
             # If already exists, toggle it off (delete)

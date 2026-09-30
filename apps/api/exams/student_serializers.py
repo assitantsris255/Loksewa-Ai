@@ -2,7 +2,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .models import (
-    Examination, ExaminationAttempt, StudentAnswer, Question,
+    Examination, ExaminationAttempt, ExaminationRequest, StudentAnswer, Question,
     SubjectiveSubmission, SubjectiveSubmissionPage, SubjectiveQuestionScore,
 )
 from .attempt_timing import (
@@ -18,12 +18,51 @@ from .attempt_timing import (
     is_subjective_upload_open,
 )
 
+
+class ExaminationRequestSerializer(serializers.ModelSerializer):
+    examination_title = serializers.SerializerMethodField()
+    examination_status = serializers.CharField(source='examination.status', read_only=True, allow_null=True)
+    requested_exam_name = serializers.CharField(source='academic_exam.name', read_only=True, allow_null=True)
+    requested_course_title = serializers.CharField(source='course.title', read_only=True, allow_null=True)
+    requested_subject_name = serializers.CharField(source='subject.name', read_only=True, allow_null=True)
+    requested_topic_name = serializers.CharField(source='topic.name', read_only=True, allow_null=True)
+    student_name = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ExaminationRequest
+        fields = [
+            'id', 'request_type', 'student', 'student_name', 'examination', 'examination_title', 'examination_status',
+            'academic_exam', 'requested_exam_name', 'course', 'requested_course_title',
+            'subject', 'requested_subject_name', 'topic', 'requested_topic_name',
+            'status', 'rejection_reason', 'reviewed_by', 'reviewed_by_name',
+            'reviewed_at', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_student_name(self, obj):
+        return obj.student.get_full_name() or obj.student.username
+
+    def get_examination_title(self, obj):
+        if obj.examination_id:
+            return obj.examination.title
+        if obj.academic_exam_id:
+            return f'{obj.academic_exam.name} Subjective Live Exam'
+        return 'Examination request'
+
+    def get_reviewed_by_name(self, obj):
+        if not obj.reviewed_by_id:
+            return None
+        return obj.reviewed_by.get_full_name() or obj.reviewed_by.username
+
 class StudentExaminationSerializer(serializers.ModelSerializer):
     course_id = serializers.IntegerField(source='course.id', read_only=True)
     course_title = serializers.CharField(source='course.title', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
     exam_name = serializers.CharField(source='exam.name', read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
+    topic_id = serializers.IntegerField(source='topic.id', read_only=True, allow_null=True)
+    topic_name = serializers.CharField(source='topic.name', read_only=True, allow_null=True)
     has_attempted = serializers.SerializerMethodField()
     attempts_used = serializers.SerializerMethodField()
     attempts_remaining = serializers.SerializerMethodField()
@@ -42,7 +81,7 @@ class StudentExaminationSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'description', 'exam_type', 'objective_category',
             'effective_category', 'category_name', 'course_id', 'course_title',
-            'exam_name', 'subject_name', 'instructions', 'thumbnail',
+            'exam_name', 'subject_name', 'topic_id', 'topic_name', 'instructions', 'thumbnail',
             'total_questions', 'time_limit', 'total_marks',
             'passing_marks', 'marks_per_question', 'negative_marking',
             'negative_marking_value', 'max_attempts', 'allow_resume',

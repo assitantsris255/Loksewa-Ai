@@ -11,6 +11,7 @@ from .views import (
 )
 from .student_exam_views import (
     StudentExaminationViewSet,
+    StudentExaminationRequestViewSet,
     StudentExaminationAttemptViewSet,
     TeacherExaminationAttemptViewSet,
     LeaderboardViewSet,
@@ -62,6 +63,7 @@ router.register(r'teacher/examination-attempts', TeacherExaminationAttemptViewSe
 
 # Student Exam routes
 router.register(r'student/exams', StudentExaminationViewSet, basename='student-exam')
+router.register(r'student/exam-requests', StudentExaminationRequestViewSet, basename='student-exam-request')
 router.register(r'student/exam-attempts', StudentExaminationAttemptViewSet, basename='student-exam-attempt')
 router.register(r'student/leaderboard', LeaderboardViewSet, basename='student-leaderboard')
 

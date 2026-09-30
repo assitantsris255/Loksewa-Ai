@@ -92,6 +92,9 @@ export function StudentContextProvider({ children }: { children: React.ReactNode
       queryClient.invalidateQueries({ queryKey: ["student-exam-schedule"] });
       queryClient.invalidateQueries({ queryKey: ["student-examinations"] });
       queryClient.invalidateQueries({ queryKey: ["student-exams"] });
+      queryClient.invalidateQueries({ queryKey: ["practice-exams"] });
+      queryClient.invalidateQueries({ queryKey: ["saved-questions"] });
+      queryClient.invalidateQueries({ queryKey: ["revision-summary"] });
       queryClient.invalidateQueries({ queryKey: ["upcoming-mock-exam"] });
       queryClient.invalidateQueries({ queryKey: ["study-plan"] });
 

@@ -30,6 +30,7 @@ export interface AdminPosition {
   name: string;
   description: string;
   is_active: boolean;
+  status?: "active" | "coming_soon" | "inactive";
   order: number;
   created_at: string;
   updated_at: string;
@@ -128,10 +129,22 @@ export const adminSyllabusApi = {
   // Categories
   getCategories: () => apiClient<AdminExamCategory[]>(`${SYLLABUS_BASE}/categories/`),
   getCategory: (id: number) => apiClient<AdminExamCategory>(`${SYLLABUS_BASE}/categories/${id}/`),
-  createCategory: (data: Partial<AdminExamCategory>) => apiClient<AdminExamCategory>(`${SYLLABUS_BASE}/categories/`, { method: "POST", body: JSON.stringify(data) }),
-  updateCategory: (id: number, data: Partial<AdminExamCategory>) => apiClient<AdminExamCategory>(`${SYLLABUS_BASE}/categories/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteCategory: (id: number) => apiClient(`${SYLLABUS_BASE}/categories/${id}/`, { method: "DELETE" }),
-  reorderCategories: (data: ReorderItem[]) => apiClient(`${SYLLABUS_BASE}/categories/reorder/`, { method: "PATCH", body: JSON.stringify(data) }),
+  createCategory: (data: Partial<AdminExamCategory>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminExamCategory>(`${SYLLABUS_BASE}/categories/`, { method: "POST", body: JSON.stringify(data) });
+  },
+  updateCategory: (id: number, data: Partial<AdminExamCategory>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminExamCategory>(`${SYLLABUS_BASE}/categories/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  deleteCategory: (id: number, force: boolean = true) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/categories/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" });
+  },
+  reorderCategories: (data: ReorderItem[]) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/categories/reorder/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
 
   // Positions.
   // A "Position / Level" in the syllabus tree is the Exam model, which lives at
@@ -140,32 +153,80 @@ export const adminSyllabusApi = {
   // are not valid for the `exam` field on question sets or exams.
   getPositions: (categoryId?: number) => apiClient<AdminPosition[]>(`${SYLLABUS_BASE}/exams/${categoryId ? `?category=${categoryId}` : ''}`),
   getPosition: (id: number) => apiClient<AdminPosition>(`${SYLLABUS_BASE}/exams/${id}/`),
-  createPosition: (data: Partial<AdminPosition>) => apiClient<AdminPosition>(`${SYLLABUS_BASE}/exams/`, { method: "POST", body: JSON.stringify(data) }),
-  updatePosition: (id: number, data: Partial<AdminPosition>) => apiClient<AdminPosition>(`${SYLLABUS_BASE}/exams/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deletePosition: (id: number) => apiClient(`${SYLLABUS_BASE}/exams/${id}/`, { method: "DELETE" }),
-  reorderPositions: (data: ReorderItem[]) => apiClient(`${SYLLABUS_BASE}/exams/reorder/`, { method: "PATCH", body: JSON.stringify(data) }),
+  createPosition: (data: Partial<AdminPosition>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminPosition>(`${SYLLABUS_BASE}/exams/`, { method: "POST", body: JSON.stringify(data) });
+  },
+  updatePosition: (id: number, data: Partial<AdminPosition>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminPosition>(`${SYLLABUS_BASE}/exams/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  deletePosition: (id: number, force: boolean = true) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/exams/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" });
+  },
+  reorderPositions: (data: ReorderItem[]) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/exams/reorder/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
 
   // Subjects
   getSubjects: (positionId?: number) => apiClient<AdminSubject[]>(`${SYLLABUS_BASE}/subjects/${positionId ? `?exam=${positionId}` : ''}`),
   getSubject: (id: number) => apiClient<AdminSubject>(`${SYLLABUS_BASE}/subjects/${id}/`),
-  createSubject: (data: Partial<AdminSubject>) => apiClient<AdminSubject>(`${SYLLABUS_BASE}/subjects/`, { method: "POST", body: JSON.stringify(data) }),
-  updateSubject: (id: number, data: Partial<AdminSubject>) => apiClient<AdminSubject>(`${SYLLABUS_BASE}/subjects/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteSubject: (id: number) => apiClient(`${SYLLABUS_BASE}/subjects/${id}/`, { method: "DELETE" }),
-  reorderSubjects: (data: ReorderItem[]) => apiClient(`${SYLLABUS_BASE}/subjects/reorder/`, { method: "PATCH", body: JSON.stringify(data) }),
+  createSubject: (data: Partial<AdminSubject>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminSubject>(`${SYLLABUS_BASE}/subjects/`, { method: "POST", body: JSON.stringify(data) });
+  },
+  updateSubject: (id: number, data: Partial<AdminSubject>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminSubject>(`${SYLLABUS_BASE}/subjects/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  deleteSubject: (id: number, force: boolean = true) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/subjects/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" });
+  },
+  reorderSubjects: (data: ReorderItem[]) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/subjects/reorder/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
 
   // Chapters
   getChapters: (subjectId?: number) => apiClient<AdminChapter[]>(`${SYLLABUS_BASE}/chapters/${subjectId ? `?subject=${subjectId}` : ''}`),
   getChapter: (id: number) => apiClient<AdminChapter>(`${SYLLABUS_BASE}/chapters/${id}/`),
-  createChapter: (data: Partial<AdminChapter>) => apiClient<AdminChapter>(`${SYLLABUS_BASE}/chapters/`, { method: "POST", body: JSON.stringify(data) }),
-  updateChapter: (id: number, data: Partial<AdminChapter>) => apiClient<AdminChapter>(`${SYLLABUS_BASE}/chapters/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteChapter: (id: number) => apiClient(`${SYLLABUS_BASE}/chapters/${id}/`, { method: "DELETE" }),
-  reorderChapters: (data: ReorderItem[]) => apiClient(`${SYLLABUS_BASE}/chapters/reorder/`, { method: "PATCH", body: JSON.stringify(data) }),
+  createChapter: (data: Partial<AdminChapter>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminChapter>(`${SYLLABUS_BASE}/chapters/`, { method: "POST", body: JSON.stringify(data) });
+  },
+  updateChapter: (id: number, data: Partial<AdminChapter>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminChapter>(`${SYLLABUS_BASE}/chapters/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  deleteChapter: (id: number, force: boolean = true) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/chapters/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" });
+  },
+  reorderChapters: (data: ReorderItem[]) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/chapters/reorder/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
 
   // Topics
   getTopics: (chapterId?: number) => apiClient<AdminTopic[]>(`${SYLLABUS_BASE}/topics/${chapterId ? `?chapter=${chapterId}` : ''}`),
   getTopic: (id: number) => apiClient<AdminTopic>(`${SYLLABUS_BASE}/topics/${id}/`),
-  createTopic: (data: Partial<AdminTopic>) => apiClient<AdminTopic>(`${SYLLABUS_BASE}/topics/`, { method: "POST", body: JSON.stringify(data) }),
-  updateTopic: (id: number, data: Partial<AdminTopic>) => apiClient<AdminTopic>(`${SYLLABUS_BASE}/topics/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteTopic: (id: number) => apiClient(`${SYLLABUS_BASE}/topics/${id}/`, { method: "DELETE" }),
-  reorderTopics: (data: ReorderItem[]) => apiClient(`${SYLLABUS_BASE}/topics/reorder/`, { method: "PATCH", body: JSON.stringify(data) }),
+  createTopic: (data: Partial<AdminTopic>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminTopic>(`${SYLLABUS_BASE}/topics/`, { method: "POST", body: JSON.stringify(data) });
+  },
+  updateTopic: (id: number, data: Partial<AdminTopic>) => {
+    clearAcademicTreeCache();
+    return apiClient<AdminTopic>(`${SYLLABUS_BASE}/topics/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  deleteTopic: (id: number, force: boolean = true) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/topics/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" });
+  },
+  reorderTopics: (data: ReorderItem[]) => {
+    clearAcademicTreeCache();
+    return apiClient(`${SYLLABUS_BASE}/topics/reorder/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
 };

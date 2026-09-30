@@ -10,7 +10,7 @@ class AdminExamScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExamSchedule
         fields = [
-            'id', 'title', 'exam_category', 'category_name',
+            'id', 'title', 'exam_type', 'exam_category', 'category_name',
             'exam', 'exam_name', 'description', 'exam_date',
             'exam_time', 'exam_datetime', 'timezone',
             'application_deadline', 'result_expected_date',
@@ -51,7 +51,7 @@ class StudentExamScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExamSchedule
         fields = [
-            'id', 'title', 'exam_category', 'category_name',
+            'id', 'title', 'exam_type', 'exam_category', 'category_name',
             'exam', 'exam_name', 'description', 'exam_date',
             'exam_time', 'exam_datetime', 'timezone',
             'application_deadline', 'result_expected_date',

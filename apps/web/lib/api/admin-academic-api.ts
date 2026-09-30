@@ -125,7 +125,7 @@ export const adminAcademicApi = {
     ),
 
   // Delete node with optional force query param
-  deleteNode: (model: "subjects" | "chapters" | "topics" | "exams", id: number, force?: boolean) =>
+  deleteNode: (model: "subjects" | "chapters" | "topics" | "exams", id: number, force: boolean = true) =>
     apiClient<any>(`/admin/academic/${model}/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" }),
 
   // Exam Categories
@@ -137,7 +137,7 @@ export const adminAcademicApi = {
   getExam: (id: number) => apiClient<ApiExam>(`/admin/academic/exams/${id}/`),
   createExam: (data: Partial<ApiExam>) => apiClient<ApiExam>(`/admin/academic/exams/`, { method: "POST", body: JSON.stringify(data) }),
   updateExam: (id: number, data: Partial<ApiExam>) => apiClient<ApiExam>(`/admin/academic/exams/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteExam: (id: number) => apiClient(`/admin/academic/exams/${id}/`, { method: "DELETE" }),
+  deleteExam: (id: number, force: boolean = true) => apiClient(`/admin/academic/exams/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" }),
 
   // Papers
   getPapers: (examId?: number) =>
@@ -145,7 +145,7 @@ export const adminAcademicApi = {
   getPaper: (id: number) => apiClient<ApiPaper>(`/admin/academic/papers/${id}/`),
   createPaper: (data: Partial<ApiPaper>) => apiClient<ApiPaper>(`/admin/academic/papers/`, { method: "POST", body: JSON.stringify(data) }),
   updatePaper: (id: number, data: Partial<ApiPaper>) => apiClient<ApiPaper>(`/admin/academic/papers/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deletePaper: (id: number) => apiClient(`/admin/academic/papers/${id}/`, { method: "DELETE" }),
+  deletePaper: (id: number, force: boolean = true) => apiClient(`/admin/academic/papers/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" }),
 
   // Subjects
   getSubjects: (paperId?: number) =>
@@ -153,7 +153,7 @@ export const adminAcademicApi = {
   getSubject: (id: number) => apiClient<ApiSubject>(`/admin/academic/subjects/${id}/`),
   createSubject: (data: Partial<ApiSubject>) => apiClient<ApiSubject>(`/admin/academic/subjects/`, { method: "POST", body: JSON.stringify(data) }),
   updateSubject: (id: number, data: Partial<ApiSubject>) => apiClient<ApiSubject>(`/admin/academic/subjects/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteSubject: (id: number, force?: boolean) => apiClient(`/admin/academic/subjects/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" }),
+  deleteSubject: (id: number, force: boolean = true) => apiClient(`/admin/academic/subjects/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" }),
   reorderSubjects: (data: { id: number; order: number }[]) => apiClient(`/admin/academic/subjects/reorder/`, { method: "PATCH", body: JSON.stringify(data) }),
 
   // Chapters
@@ -162,7 +162,7 @@ export const adminAcademicApi = {
   getChapter: (id: number) => apiClient<ApiChapter>(`/admin/academic/chapters/${id}/`),
   createChapter: (data: Partial<ApiChapter>) => apiClient<ApiChapter>(`/admin/academic/chapters/`, { method: "POST", body: JSON.stringify(data) }),
   updateChapter: (id: number, data: Partial<ApiChapter>) => apiClient<ApiChapter>(`/admin/academic/chapters/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteChapter: (id: number, force?: boolean) => apiClient(`/admin/academic/chapters/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" }),
+  deleteChapter: (id: number, force: boolean = true) => apiClient(`/admin/academic/chapters/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" }),
 
   // Topics
   getTopics: (chapterId?: number) =>
@@ -170,5 +170,5 @@ export const adminAcademicApi = {
   getTopic: (id: number) => apiClient<ApiTopic>(`/admin/academic/topics/${id}/`),
   createTopic: (data: Partial<ApiTopic>) => apiClient<ApiTopic>(`/admin/academic/topics/`, { method: "POST", body: JSON.stringify(data) }),
   updateTopic: (id: number, data: Partial<ApiTopic>) => apiClient<ApiTopic>(`/admin/academic/topics/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteTopic: (id: number, force?: boolean) => apiClient(`/admin/academic/topics/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" }),
+  deleteTopic: (id: number, force: boolean = true) => apiClient(`/admin/academic/topics/${id}/${force ? '?force=true' : ''}`, { method: "DELETE" }),
 };

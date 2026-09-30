@@ -17,6 +17,8 @@ interface Props {
   examinationId: number;
   /** The exam's own academic targeting, used as the default bank scope. */
   defaultSubjectId?: number | null;
+  /** Locks the question bank to the configured Topicwise Test topic. */
+  defaultTopicId?: number | null;
   /** Pre-selects a QuestionCollection as the bank source - set when arriving
    *  here via "Use in Mock Exam" from the admin Collections page. */
   defaultCollectionId?: number | null;
@@ -30,7 +32,7 @@ const DIFFICULTY_TONE: Record<string, string> = {
 };
 
 export function QuestionSelectionWorkspace({
-  examinationId, defaultSubjectId, defaultCollectionId, onSelectionChange,
+  examinationId, defaultSubjectId, defaultTopicId, defaultCollectionId, onSelectionChange,
 }: Props) {
   // Bank (left)
   const [bank, setBank] = useState<PaginatedBank | null>(null);
@@ -44,7 +46,7 @@ export function QuestionSelectionWorkspace({
   const [showFilters, setShowFilters] = useState(false);
   const [subjectId, setSubjectId] = useState<number | undefined>(defaultSubjectId ?? undefined);
   const [chapterId, setChapterId] = useState<number | undefined>();
-  const [topicId, setTopicId] = useState<number | undefined>();
+  const [topicId, setTopicId] = useState<number | undefined>(defaultTopicId ?? undefined);
   const [questionType, setQuestionType] = useState("");
   const [difficulty, setDifficulty] = useState("");
   const [subjects, setSubjects] = useState<any[]>([]);
@@ -158,6 +160,13 @@ export function QuestionSelectionWorkspace({
     if (!chapterId) return;
     adminSyllabusApi.getTopics(chapterId).then(r => setTopics(Array.isArray(r) ? r : [])).catch(() => {});
   }, [chapterId]);
+
+  useEffect(() => {
+    if (!defaultTopicId) return;
+    adminSyllabusApi.getTopic(defaultTopicId)
+      .then(topic => { if (topic.chapter) setChapterId(topic.chapter); })
+      .catch(() => toast.error("Could not load the selected topic."));
+  }, [defaultTopicId]);
 
   const withBusy = async (id: number, fn: () => Promise<void>) => {
     setBusyIds(prev => new Set(prev).add(id));
@@ -515,6 +524,7 @@ export function QuestionSelectionWorkspace({
                 <select
                   value={subjectId ?? ""}
                   onChange={(e) => { setSubjectId(e.target.value ? Number(e.target.value) : undefined); setChapterId(undefined); setTopicId(undefined); setPage(1); }}
+                  disabled={!!defaultTopicId}
                   className="px-2.5 py-2 border border-slate-200 rounded-lg text-sm bg-white text-slate-900"
                 >
                   <option value="">All subjects</option>
@@ -523,7 +533,7 @@ export function QuestionSelectionWorkspace({
                 <select
                   value={chapterId ?? ""}
                   onChange={(e) => { setChapterId(e.target.value ? Number(e.target.value) : undefined); setTopicId(undefined); setPage(1); }}
-                  disabled={!subjectId}
+                  disabled={!subjectId || !!defaultTopicId}
                   className="px-2.5 py-2 border border-slate-200 rounded-lg text-sm bg-white text-slate-900 disabled:bg-slate-50"
                 >
                   <option value="">All chapters</option>
@@ -532,7 +542,7 @@ export function QuestionSelectionWorkspace({
                 <select
                   value={topicId ?? ""}
                   onChange={(e) => { setTopicId(e.target.value ? Number(e.target.value) : undefined); setPage(1); }}
-                  disabled={!chapterId}
+                  disabled={!chapterId || !!defaultTopicId}
                   className="px-2.5 py-2 border border-slate-200 rounded-lg text-sm bg-white text-slate-900 disabled:bg-slate-50"
                 >
                   <option value="">All topics</option>

@@ -8,7 +8,7 @@ from rest_framework.test import APITestCase
 from rest_framework import status
 
 from exams.models import (
-    ExamCategory, Exam, Examination, ExaminationAttempt,
+    ExamCategory, Exam, Examination, ExaminationAttempt, ExaminationRequest,
     SubjectiveSubmission, SubjectiveSubmissionPage, SubjectiveQuestionScore
 )
 from courses.models import Course, Enrollment
@@ -81,6 +81,13 @@ class SubjectiveExamWorkflowTests(APITestCase):
             allowed_file_types='pdf,image',
             status='published',
             created_by=self.admin,
+        )
+
+        # Approved ExaminationRequest for subjective attempt
+        ExaminationRequest.objects.create(
+            student=self.student,
+            examination=self.subjective_exam,
+            status='approved',
         )
 
     def test_01_admin_upload_and_stream_question_paper_pdf(self):

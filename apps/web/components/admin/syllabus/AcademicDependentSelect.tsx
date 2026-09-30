@@ -54,6 +54,81 @@ export function AcademicDependentSelect({
   const pendingChapter = pendingValue(chapters, chapter);
   const pendingTopic = pendingValue(topics, topic);
 
+  const flattenPositionNodes = (nodes: any[] = [], acc: any[] = []): any[] => {
+    for (const node of nodes) {
+      acc.push(node);
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        flattenPositionNodes(node.children, acc);
+      }
+    }
+    return acc;
+  };
+
+  const findPositionSubjects = (nodes: any[] = []): any[] => {
+    const found: any[] = [];
+    const walk = (items: any[]) => {
+      for (const item of items) {
+        const subjects = ((item.papers || []) as any[]).flatMap((paper: any) => paper.subjects || []);
+        found.push(...subjects);
+        if (Array.isArray(item.children) && item.children.length > 0) walk(item.children);
+      }
+    };
+    walk(nodes);
+    return found;
+  };
+
+  const findSubjectChapters = (nodes: any[] = [], subjectId: number): any[] => {
+    for (const node of nodes) {
+      for (const paper of (node.papers || []) as any[]) {
+        for (const sub of (paper.subjects || []) as any[]) {
+          if (Number(sub.id) === Number(subjectId)) {
+            return sub.chapters || [];
+          }
+        }
+      }
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        const nested = findSubjectChapters(node.children, subjectId);
+        if (nested.length > 0) return nested;
+      }
+    }
+    return [];
+  };
+
+  const collectPositionChapters = (nodes: any[] = []): any[] => {
+    const found: any[] = [];
+    const walk = (items: any[]) => {
+      for (const item of items) {
+        for (const paper of (item.papers || []) as any[]) {
+          for (const sub of (paper.subjects || []) as any[]) {
+            found.push(...(sub.chapters || []));
+          }
+        }
+        if (Array.isArray(item.children) && item.children.length > 0) walk(item.children);
+      }
+    };
+    walk(nodes);
+    return found;
+  };
+
+  const findChapterTopics = (nodes: any[] = [], chapterId: number): any[] => {
+    for (const node of nodes) {
+      for (const paper of (node.papers || []) as any[]) {
+        for (const sub of (paper.subjects || []) as any[]) {
+          for (const chap of (sub.chapters || []) as any[]) {
+            if (Number(chap.id) === Number(chapterId)) {
+              return chap.topics || [];
+            }
+          }
+        }
+      }
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        const nested = findChapterTopics(node.children, chapterId);
+        if (nested.length > 0) return nested;
+      }
+    }
+    return [];
+  };
+
   // 1. Load full academic hierarchy tree in ONE fast cached request
   useEffect(() => {
     let isMounted = true;
@@ -98,8 +173,8 @@ export function AcademicDependentSelect({
     }
     const catId = Number(category);
     const catNode = tree.find(c => c.id === catId);
-    if (catNode && catNode.positions && catNode.positions.length > 0) {
-      setPositions(catNode.positions);
+    if (catNode && Array.isArray(catNode.positions) && catNode.positions.length > 0) {
+      setPositions(flattenPositionNodes(catNode.positions));
     } else if (!loading.tree) {
       setLoading(prev => ({ ...prev, position: true }));
       adminSyllabusApi.getPositions(catId)
@@ -119,22 +194,12 @@ export function AcademicDependentSelect({
     let foundSubjects: any[] = [];
 
     for (const cat of tree) {
-      for (const pos of (cat.positions || [])) {
-        if (pos.id === posId) {
-          const directSubs = (pos.papers || []).flatMap((p: any) => p.subjects || []);
-          const childSubs = (pos.children || []).flatMap((ch: any) => (ch.papers || []).flatMap((p: any) => p.subjects || []));
-          foundSubjects = [...directSubs, ...childSubs];
-          break;
-        }
-        for (const child of (pos.children || [])) {
-          if (child.id === posId) {
-            foundSubjects = (child.papers || []).flatMap((p: any) => p.subjects || []);
-            break;
-          }
-        }
-        if (foundSubjects.length > 0) break;
+      const nestedPositions = flattenPositionNodes(cat.positions || []);
+      const matchedPosition = nestedPositions.find(pos => pos.id === posId);
+      if (matchedPosition) {
+        foundSubjects = findPositionSubjects([matchedPosition]);
+        break;
       }
-      if (foundSubjects.length > 0) break;
     }
 
     if (foundSubjects.length > 0) {
@@ -161,23 +226,12 @@ export function AcademicDependentSelect({
       let foundChapters: any[] = [];
 
       for (const cat of tree) {
-        for (const pos of (cat.positions || [])) {
-          const allPos = [pos, ...(pos.children || [])];
-          for (const p of allPos) {
-            for (const paper of (p.papers || [])) {
-              for (const sub of (paper.subjects || [])) {
-                if (sub.id === subId) {
-                  foundChapters = sub.chapters || [];
-                  break;
-                }
-              }
-              if (foundChapters.length > 0) break;
-            }
-            if (foundChapters.length > 0) break;
-          }
-          if (foundChapters.length > 0) break;
+        const nestedPositions = flattenPositionNodes(cat.positions || []);
+        const related = findSubjectChapters(nestedPositions, subId);
+        if (related.length > 0) {
+          foundChapters = related;
+          break;
         }
-        if (foundChapters.length > 0) break;
       }
 
       if (foundChapters.length > 0) {
@@ -190,28 +244,20 @@ export function AcademicDependentSelect({
           .finally(() => setLoading(prev => ({ ...prev, chapter: false })));
       }
     } else {
-      // Subject is optional and not selected — load all chapters for the position
+      // Subject is optional and not selected — load all chapters for the position.
       const posId = Number(position);
       let allChapters: any[] = [];
       for (const cat of tree) {
-        for (const pos of (cat.positions || [])) {
-          const allPos = [pos, ...(pos.children || [])];
-          for (const p of allPos) {
-            if (p.id === posId) {
-              for (const paper of (p.papers || [])) {
-                for (const sub of (paper.subjects || [])) {
-                  allChapters = [...allChapters, ...(sub.chapters || [])];
-                }
-              }
-            }
-          }
+        const nestedPositions = flattenPositionNodes(cat.positions || []);
+        const matchedPosition = nestedPositions.find(pos => pos.id === posId);
+        if (matchedPosition) {
+          allChapters = collectPositionChapters([matchedPosition]);
+          break;
         }
       }
       if (allChapters.length > 0) {
         setChapters(allChapters);
       } else {
-        // Fallback: could call getChapters for position, but API doesn't support it;
-        // leave empty so user knows to select a subject first via API.
         setChapters([]);
       }
     }
@@ -227,26 +273,12 @@ export function AcademicDependentSelect({
     let foundTopics: any[] = [];
 
     for (const cat of tree) {
-      for (const pos of (cat.positions || [])) {
-        const allPos = [pos, ...(pos.children || [])];
-        for (const p of allPos) {
-          for (const paper of (p.papers || [])) {
-            for (const sub of (paper.subjects || [])) {
-              for (const chap of (sub.chapters || [])) {
-                if (chap.id === chapId) {
-                  foundTopics = chap.topics || [];
-                  break;
-                }
-              }
-              if (foundTopics.length > 0) break;
-            }
-            if (foundTopics.length > 0) break;
-          }
-          if (foundTopics.length > 0) break;
-        }
-        if (foundTopics.length > 0) break;
+      const nestedPositions = flattenPositionNodes(cat.positions || []);
+      const related = findChapterTopics(nestedPositions, chapId);
+      if (related.length > 0) {
+        foundTopics = related;
+        break;
       }
-      if (foundTopics.length > 0) break;
     }
 
     if (foundTopics.length > 0) {
@@ -321,21 +353,11 @@ export function AcademicDependentSelect({
                 ? 'Loading positions...'
                 : 'Select Position'}
             </option>
-            {/* Grouped by Level (Exam.parent) */}
-            {positions.filter(p => !p.parent).map(level => {
-              const children = positions.filter(p => p.parent === level.id);
-              if (children.length === 0) {
-                return <option key={level.id} value={String(level.id)}>{level.name}</option>;
-              }
-              return (
-                <optgroup key={level.id} label={level.name}>
-                  <option value={String(level.id)}>{level.name} (General)</option>
-                  {children.map(child => (
-                    <option key={child.id} value={String(child.id)}>{child.name}</option>
-                  ))}
-                </optgroup>
-              );
-            })}
+            {positions.map(positionNode => (
+              <option key={positionNode.id} value={String(positionNode.id)}>
+                {positionNode.name}
+              </option>
+            ))}
           </select>
           {loading.position && <p className="text-xs text-gray-400 mt-1">Loading positions...</p>}
           {(errors.exam || errors.position) && <p className="text-red-500 text-xs mt-1">{errors.exam || errors.position}</p>}

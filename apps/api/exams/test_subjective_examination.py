@@ -11,10 +11,12 @@ to prove the two share one architecture without interfering with each other.
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
+from django.test import override_settings
+from tempfile import TemporaryDirectory
 
 from exams.models import (
     ExamCategory, Exam, Paper, Subject, Chapter, Topic, Question,
-    Examination, ExaminationQuestion, ExaminationAttempt, StudentAnswer,
+    Examination, ExaminationQuestion, ExaminationAttempt, ExaminationRequest, StudentAnswer,
 )
 
 User = get_user_model()
@@ -85,6 +87,162 @@ class CanonicalExaminationCreationTests(SubjectiveExaminationTestBase):
         # No separate SubjectiveExam/ObjectiveExam table exists - both modes
         # are rows in the same Examination table.
         self.assertEqual(Examination.objects.filter(pk=exam.pk).count(), 1)
+
+
+class SubjectiveLiveExamGenerationTests(SubjectiveExaminationTestBase):
+    url = '/api/admin/exams/generate-subjective-live/'
+    generation_key = 'a7d1dd0f-31be-4f5b-9a38-8a8c1c8137cc'
+
+    @classmethod
+    def setUpClass(cls):
+        cls._media_directory = TemporaryDirectory()
+        cls._storage_override = override_settings(
+            STORAGES={
+                'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+                'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+            },
+            MEDIA_ROOT=cls._media_directory.name,
+        )
+        cls._storage_override.enable()
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        cls._storage_override.disable()
+        cls._media_directory.cleanup()
+
+    def payload(self, **overrides):
+        data = {
+            'generation_key': self.generation_key,
+            'exam': self.exam_level.id,
+            'title': 'Section Officer Subjective Live Exam',
+            'question_count': 1,
+            'time_limit': 90,
+            'question_type': 'subjective',
+        }
+        data.update(overrides)
+        return data
+
+    def test_generation_uses_approved_bank_and_stores_a_draft_pdf_idempotently(self):
+        self.client.force_authenticate(self.admin)
+        created = self.client.post(self.url, self.payload(), format='json')
+
+        self.assertEqual(created.status_code, 201, created.data)
+        examination = Examination.objects.get(pk=created.data['id'])
+        self.assertEqual(examination.exam_type, 'subjective')
+        self.assertEqual(examination.status, 'draft')
+        self.assertEqual(examination.total_questions, 1)
+        self.assertEqual(examination.total_marks, 10)
+        self.assertEqual(
+            list(examination.examination_questions.values_list('question_id', flat=True)),
+            [self.subjective_question.id],
+        )
+        self.assertTrue(examination.question_paper_pdf)
+        with examination.question_paper_pdf.open('rb') as paper:
+            self.assertTrue(paper.read().startswith(b'%PDF-'))
+
+        repeated = self.client.post(self.url, self.payload(), format='json')
+        self.assertEqual(repeated.status_code, 200)
+        self.assertTrue(repeated.data['reused'])
+        self.assertEqual(repeated.data['id'], examination.id)
+        self.assertEqual(Examination.objects.count(), 1)
+
+    def test_regeneration_updates_the_existing_draft_and_changes_its_question_set(self):
+        self.client.force_authenticate(self.admin)
+        first = self.client.post(self.url, self.payload(), format='json')
+        extra_question = Question.objects.create(
+            topic=self.topic, question_type='long_answer', status='approved',
+            text='Describe the bending moment diagram.', model_answer='Reference.', marks=15,
+        )
+
+        regenerated = self.client.post(
+            self.url, self.payload(regenerate=True), format='json'
+        )
+
+        self.assertEqual(regenerated.status_code, 200, regenerated.data)
+        self.assertEqual(regenerated.data['id'], first.data['id'])
+        examination = Examination.objects.get(pk=first.data['id'])
+        self.assertEqual(examination.examination_questions.count(), 1)
+        self.assertEqual(examination.examination_questions.get().question_id, extra_question.id)
+        self.assertTrue(examination.question_paper_pdf)
+
+    def test_insufficient_approved_pool_does_not_create_an_examination(self):
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.post(self.url, self.payload(question_count=2), format='json')
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(Examination.objects.count(), 0)
+
+    def test_student_cannot_use_the_subjective_generator(self):
+        self.client.force_authenticate(self.student)
+
+        response = self.client.post(self.url, self.payload(), format='json')
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Examination.objects.count(), 0)
+
+    def test_generated_subjective_request_is_approved_only_after_publishing(self):
+        exam_request = ExaminationRequest.objects.create(
+            student=self.student,
+            academic_exam=self.exam_level,
+            subject=self.subject,
+            request_type='subjective_live',
+        )
+        self.client.force_authenticate(self.admin)
+
+        generated = self.client.post(
+            self.url,
+            self.payload(request_id=exam_request.id, subject=self.subject.id),
+            format='json',
+        )
+
+        self.assertEqual(generated.status_code, 201, generated.data)
+        exam_request.refresh_from_db()
+        self.assertEqual(exam_request.status, 'pending')
+        self.assertEqual(exam_request.examination_id, generated.data['id'])
+        retried = self.client.post(
+            self.url,
+            self.payload(request_id=exam_request.id, generation_key='4bd9440c-bf72-4f0f-8e9b-98d813cd5f05'),
+            format='json',
+        )
+        self.assertEqual(retried.status_code, 200)
+        self.assertEqual(retried.data['id'], generated.data['id'])
+        premature_approval = self.client.post(f'/api/admin/exam-requests/{exam_request.id}/approve/')
+        self.assertEqual(premature_approval.status_code, 409)
+
+        published = self.client.post(f'/api/admin/exams/{generated.data["id"]}/publish/')
+
+        self.assertEqual(published.status_code, 200, published.data)
+        exam_request.refresh_from_db()
+        self.assertEqual(exam_request.status, 'approved')
+        self.assertEqual(exam_request.reviewed_by_id, self.admin.id)
+
+    def test_manual_subjective_exam_creation_links_the_pending_request(self):
+        exam_request = ExaminationRequest.objects.create(
+            student=self.student,
+            academic_exam=self.exam_level,
+            subject=self.subject,
+            request_type='subjective_live',
+        )
+        self.client.force_authenticate(self.admin)
+
+        created = self.client.post('/api/admin/exams/', {
+            'request_id': exam_request.id,
+            'title': 'Manually Prepared Subjective Exam',
+            'exam_type': 'subjective',
+            'category': self.category.id,
+            'exam': self.exam_level.id,
+            'subject': self.subject.id,
+            'time_limit': 90,
+            'total_marks': 10,
+        }, format='json')
+
+        self.assertEqual(created.status_code, 201, created.data)
+        exam_request.refresh_from_db()
+        self.assertEqual(exam_request.examination_id, created.data['id'])
+        self.assertEqual(exam_request.status, 'pending')
 
     def test_add_questions_references_canonical_question_not_a_copy(self):
         self.client.force_authenticate(user=self.teacher)

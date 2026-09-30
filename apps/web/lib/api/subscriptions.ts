@@ -38,7 +38,7 @@ export interface SubscriptionPlan {
   }[];
   is_flexible: boolean;
   allowed_preparation_count: number;
-  status: "ACTIVE" | "INACTIVE";
+  status: "ACTIVE" | "INACTIVE" | "ARCHIVED";
   display_order: number;
   created_at: string;
   updated_at: string;
@@ -131,8 +131,8 @@ export const subscriptionsApi = {
     apiClient<SubscriptionPlan>("/subscriptions/plans/", { method: "POST", body: JSON.stringify(data) }),
   adminUpdatePlan: (id: number, data: Partial<SubscriptionPlanInput>): Promise<SubscriptionPlan> =>
     apiClient<SubscriptionPlan>(`/subscriptions/plans/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  adminDeletePlan: (id: number): Promise<void> =>
-    apiClient<void>(`/subscriptions/plans/${id}/`, { method: "DELETE" }),
+  adminDeletePlan: (id: number): Promise<{ deleted: boolean; archived: boolean; message: string }> =>
+    apiClient<{ deleted: boolean; archived: boolean; message: string }>(`/subscriptions/plans/${id}/`, { method: "DELETE" }),
 
   // Admin - payment review (also directly usable outside /admin-dashboard/applications)
   adminListPayments: (): Promise<SubscriptionPayment[]> => apiClient<SubscriptionPayment[]>("/subscriptions/payments/"),

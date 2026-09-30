@@ -9,7 +9,7 @@ import {
   Trash2, Eye, Download, FileUp, Sparkles, HelpCircle,
 } from "lucide-react";
 import { QuestionSelectionWorkspace } from "@/components/admin/exams/QuestionSelectionWorkspace";
-import { adminExamApi, Examination, ExaminationType, ObjectiveCategory } from "@/lib/api/admin-exams";
+import { adminExamApi, AdminCourseOption, Examination, ExaminationType, ObjectiveCategory } from "@/lib/api/admin-exams";
 import { adminSyllabusApi } from "@/lib/api/admin-syllabus";
 import toast from "react-hot-toast";
 
@@ -20,12 +20,20 @@ const STEPS = [
   { id: 4, title: "Configuration", icon: Settings },
 ];
 
+export type MajorExamType = "topicwise" | "objective" | "subjective";
+
+export const getMajorExamType = (type: ExaminationType): MajorExamType => {
+  if (type === "subject") return "topicwise";
+  if (type === "subjective") return "subjective";
+  return "objective";
+};
+
 const EXAM_TYPES: { value: ExaminationType; label: string }[] = [
   { value: "mock", label: "Mock Test" },
   { value: "practice", label: "Practice Test" },
   { value: "full", label: "Full-Length Exam" },
   { value: "position", label: "Position-Based Exam" },
-  { value: "subject", label: "Subject Test" },
+  { value: "subject", label: "Topicwise Test" },
   { value: "custom", label: "Custom Exam" },
   { value: "subjective", label: "Subjective Exam" },
 ];
@@ -33,8 +41,8 @@ const EXAM_TYPES: { value: ExaminationType; label: string }[] = [
 /** The four finalized Objective Exam categories — "Create Your Own Exam" is
  * always system-generated from the student custom-builder, never authored
  * here, so it's intentionally left out of this admin-facing list. */
-const OBJECTIVE_CATEGORIES: { value: Exclude<ObjectiveCategory, null | "custom">; label: string; hint: string }[] = [
-  { value: "old_past", label: "Old Past Exam", hint: "An original historical paper — questions stay fixed, never shuffled or replaced." },
+const OBJECTIVE_CATEGORIES: { value: Exclude<ObjectiveCategory, null | "topicwise">; label: string; hint: string }[] = [
+  { value: "past_year", label: "Past Year Paper", hint: "An original historical paper — questions stay fixed, never shuffled or replaced." },
   { value: "model", label: "Model Exam", hint: "Student starts whenever they like; fixed duration and paper once started." },
   { value: "live", label: "Live Exam", hint: "Fixed start/end window shared by every student; no pause or restart once begun." },
 ];
@@ -48,14 +56,36 @@ const toLocal = (iso?: string | null) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
+const flattenPositionHierarchy = (nodes: any[] = [], acc: any[] = []): any[] => {
+  for (const node of nodes) {
+    acc.push(node);
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      flattenPositionHierarchy(node.children, acc);
+    }
+  }
+  return acc;
+};
+
 export default function CreateExamPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const draftParam = searchParams?.get("draft");
+  const topicwiseParam = searchParams?.get("topicwise") === "true";
+  const typeParam = searchParams?.get("type");
+  const subjectiveRequestParam = searchParams?.get("subjectiveRequest");
+  const subjectiveRequestId = subjectiveRequestParam ? Number(subjectiveRequestParam) : null;
   // "Use in Mock Exam" from the admin Collections page arrives here.
   const collectionParam = searchParams?.get("collection");
   const defaultCollectionId = collectionParam ? Number(collectionParam) : null;
 
+  const initialMajorType: MajorExamType =
+    topicwiseParam || typeParam === "topicwise"
+      ? "topicwise"
+      : typeParam === "subjective" || subjectiveRequestParam
+      ? "subjective"
+      : "objective";
+
+  const [majorType, setMajorType] = useState<MajorExamType>(initialMajorType);
   const [step, setStep] = useState(1);
   const [examId, setExamId] = useState<number | null>(draftParam ? Number(draftParam) : null);
   const [saving, setSaving] = useState(false);
@@ -65,19 +95,31 @@ export default function CreateExamPage() {
   const [selection, setSelection] = useState({ count: 0, marks: 0 });
 
   // ── Step 1
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(initialMajorType === "topicwise" ? "Topicwise Test" : "");
   const [description, setDescription] = useState("");
-  const [examType, setExamType] = useState<ExaminationType>("mock");
-  const [objectiveCategory, setObjectiveCategory] = useState<Exclude<ObjectiveCategory, null | "custom"> | "">("");
+  const [examType, setExamType] = useState<ExaminationType>(
+    initialMajorType === "topicwise" ? "subject" : initialMajorType === "subjective" ? "subjective" : "mock"
+  );
+  const [objectiveCategory, setObjectiveCategory] = useState<Exclude<ObjectiveCategory, null | "custom"> | "">(
+    initialMajorType === "objective" ? "model" : ""
+  );
   const [instructions, setInstructions] = useState("");
 
   // ── Step 2 (canonical hierarchy: ExamCategory → Exam → Subject)
+  const [courseId, setCourseId] = useState<number | undefined>();
+  const [courseOptions, setCourseOptions] = useState<AdminCourseOption[]>([]);
   const [categoryId, setCategoryId] = useState<number | undefined>();
   const [positionId, setPositionId] = useState<number | undefined>();
   const [subjectId, setSubjectId] = useState<number | undefined>();
+  const [chapterId, setChapterId] = useState<number | undefined>();
+  const [topicId, setTopicId] = useState<number | undefined>();
   const [categories, setCategories] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);
   const [subjects, setSubjects] = useState<any[]>([]);
+  const [chapters, setChapters] = useState<any[]>([]);
+  const [topics, setTopics] = useState<any[]>([]);
+  const [academicLoading, setAcademicLoading] = useState({ courses: true, categories: true, positions: false, subjects: false, chapters: false, topics: false });
+  const [academicTree, setAcademicTree] = useState<any[]>([]);
 
   // ── Step 4
   const [timeLimit, setTimeLimit] = useState(60);
@@ -102,7 +144,7 @@ export default function CreateExamPage() {
   const [uploadDeadlineMinutes, setUploadDeadlineMinutes] = useState(15);
   const [allowedFileTypes, setAllowedFileTypes] = useState("pdf,image");
   const [maxUploadSizeMb, setMaxUploadSizeMb] = useState(25);
-  const [evaluationType, setEvaluationType] = useState<"manual" | "ai_assisted" | "hybrid">("manual");
+  const [evaluationType, setEvaluationType] = useState<"admin" | "ai" | "hybrid">("admin");
   const [subjectiveTotalMarks, setSubjectiveTotalMarks] = useState(100);
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -111,11 +153,14 @@ export default function CreateExamPage() {
     setTitle(e.title || "");
     setDescription(e.description || "");
     setExamType(e.exam_type);
-    setObjectiveCategory((e.objective_category as Exclude<ObjectiveCategory, null | "custom">) || "");
+    setMajorType(getMajorExamType(e.exam_type));
+    setObjectiveCategory((e.objective_category as Exclude<ObjectiveCategory, null | "topicwise">) || "");
     setInstructions(e.instructions || "");
+    setCourseId(e.course || undefined);
     setCategoryId(e.category || undefined);
     setPositionId(e.exam || undefined);
     setSubjectId(e.subject || undefined);
+    setTopicId(e.topic || undefined);
     setTimeLimit(e.time_limit ?? 60);
     setPassingMarks(e.passing_marks ?? 0);
     setMarksPerQuestion(e.marks_per_question ?? 1);
@@ -137,12 +182,52 @@ export default function CreateExamPage() {
     }
     if (e.allowed_file_types) setAllowedFileTypes(e.allowed_file_types);
     if (e.max_upload_size_mb) setMaxUploadSizeMb(e.max_upload_size_mb);
-    if (e.evaluation_type) setEvaluationType(e.evaluation_type);
+    if (e.evaluation_type) {
+      if (e.evaluation_type === "manual") setEvaluationType("admin");
+      else if (e.evaluation_type === "ai_assisted") setEvaluationType("ai");
+      else setEvaluationType(e.evaluation_type as "admin" | "ai" | "hybrid");
+    }
     if (e.total_marks) setSubjectiveTotalMarks(e.total_marks);
     setHasQuestionPaper(Boolean(e.question_paper_pdf));
     setQuestionPaperPageCount(e.question_paper_page_count || 0);
     setQuestionPaperFileSize(e.question_paper_file_size || 0);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    adminExamApi.getPublishedCourses()
+      .then((items) => { if (active) setCourseOptions(items); })
+      .catch(() => { if (active) toast.error("Could not load published courses."); })
+      .finally(() => { if (active) setAcademicLoading((prev) => ({ ...prev, courses: false })); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!subjectiveRequestId || draftParam) return;
+    let active = true;
+    (async () => {
+      try {
+        const examRequest = await adminExamApi.getExamRequest(subjectiveRequestId);
+        if (examRequest.request_type !== "subjective_live" || !examRequest.academic_exam || examRequest.status !== "pending") {
+          throw new Error("This is not a pending Subjective Live Exam request.");
+        }
+        const position = await adminSyllabusApi.getPosition(examRequest.academic_exam);
+        if (!active) return;
+        setExamType("subjective");
+        setMajorType("subjective");
+        setObjectiveCategory("");
+        setTitle(examRequest.examination_title);
+        setCategoryId(position.category ?? undefined);
+        setPositionId(position.id);
+        setCourseId(examRequest.course ?? undefined);
+        setSubjectId(examRequest.subject ?? undefined);
+        setTopicId(examRequest.topic ?? undefined);
+      } catch (error) {
+        if (active) toast.error(error instanceof Error ? error.message : "Could not load the subjective exam request.");
+      }
+    })();
+    return () => { active = false; };
+  }, [subjectiveRequestId, draftParam]);
 
   // Recover an existing draft after a refresh.
   useEffect(() => {
@@ -161,38 +246,106 @@ export default function CreateExamPage() {
     return () => { cancelled = true; };
   }, [draftParam, applyExam]);
 
-  // ── Dependent academic dropdowns, straight from the admin academic APIs ───
+  // ── Dependent academic dropdowns, loaded from the shared cached syllabus tree ───
   useEffect(() => {
-    adminSyllabusApi.getCategories()
-      .then(r => setCategories(Array.isArray(r) ? r : []))
-      .catch(() => toast.error("Could not load exam categories."));
+    let active = true;
+    setAcademicLoading(prev => ({ ...prev, categories: true }));
+
+    adminSyllabusApi.getTreeCached()
+      .then((treeData: any[]) => {
+        if (!active) return;
+        const validTree = Array.isArray(treeData) ? treeData : [];
+        setAcademicTree(validTree);
+        setCategories(validTree.map((category: any) => ({ id: category.id, name: category.name })));
+
+        if (categoryId) {
+          const selectedCategory = validTree.find((category: any) => category.id === categoryId);
+          setPositions(selectedCategory ? flattenPositionHierarchy(selectedCategory.positions || []) : []);
+        }
+      })
+      .catch(() => {
+        if (active) toast.error("Could not load exam categories.");
+      })
+      .finally(() => {
+        if (active) setAcademicLoading(prev => ({ ...prev, categories: false }));
+      });
+
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
-    setPositions([]);
-    if (!categoryId) return;
-    adminSyllabusApi.getPositions(categoryId)
-      .then(r => setPositions(Array.isArray(r) ? r : []))
-      .catch(() => { });
-  }, [categoryId]);
+    if (!categoryId) {
+      setPositions([]);
+      return;
+    }
+
+    const selectedCategory = academicTree.find((category: any) => category.id === categoryId);
+    setAcademicLoading(prev => ({ ...prev, positions: true }));
+    setPositions(selectedCategory ? flattenPositionHierarchy(selectedCategory.positions || []) : []);
+    setAcademicLoading(prev => ({ ...prev, positions: false }));
+  }, [categoryId, academicTree]);
 
   useEffect(() => {
-    setSubjects([]);
-    if (!positionId) return;
-    adminSyllabusApi.getSubjects(positionId)
-      .then(r => setSubjects(Array.isArray(r) ? r : []))
-      .catch(() => { });
-  }, [positionId]);
+    if (!positionId) {
+      setSubjects([]);
+      return;
+    }
+
+    setAcademicLoading(prev => ({ ...prev, subjects: true }));
+    const selectedPositions = flattenPositionHierarchy(academicTree.flatMap((category: any) => category.positions || []));
+    const matchedPosition = selectedPositions.find((position: any) => position.id === positionId);
+
+    if (matchedPosition) {
+      const uniqueSubjects = Array.from(new Map(
+        (matchedPosition.papers || []).flatMap((paper: any) => paper.subjects || []).map((subject: any) => [subject.id, subject])
+      ).values());
+      setSubjects(uniqueSubjects);
+    } else {
+      adminSyllabusApi.getSubjects(positionId)
+        .then((r) => setSubjects(Array.isArray(r) ? r : []))
+        .catch(() => { });
+    }
+    setAcademicLoading(prev => ({ ...prev, subjects: false }));
+  }, [positionId, academicTree]);
+
+  useEffect(() => {
+    setChapters([]);
+    if (!subjectId) return;
+    setAcademicLoading((prev) => ({ ...prev, chapters: true }));
+    adminSyllabusApi.getChapters(subjectId)
+      .then((items) => setChapters(Array.isArray(items) ? items : []))
+      .catch(() => toast.error("Could not load chapters."))
+      .finally(() => setAcademicLoading((prev) => ({ ...prev, chapters: false })));
+  }, [subjectId]);
+
+  useEffect(() => {
+    if (!topicId) return;
+    adminSyllabusApi.getTopic(topicId)
+      .then((topic) => { if (topic.chapter) setChapterId(topic.chapter); })
+      .catch(() => {});
+  }, [topicId]);
+
+  useEffect(() => {
+    setTopics([]);
+    if (!chapterId) return;
+    setAcademicLoading((prev) => ({ ...prev, topics: true }));
+    adminSyllabusApi.getTopics(chapterId)
+      .then((items) => setTopics(Array.isArray(items) ? items : []))
+      .catch(() => toast.error("Could not load topics."))
+      .finally(() => setAcademicLoading((prev) => ({ ...prev, topics: false })));
+  }, [chapterId]);
 
   const buildPayload = () => ({
     title: title.trim(),
     description,
     exam_type: examType,
-    objective_category: objectiveCategory || null,
+    objective_category: examType === "subject" ? "topicwise" : objectiveCategory || null,
     instructions,
     category: categoryId,
     exam: positionId,
     subject: subjectId ?? null,
+    course: courseId ?? null,
+    topic: topicId ?? null,
     time_limit: timeLimit,
     passing_marks: passingMarks,
     marks_per_question: marksPerQuestion,
@@ -206,7 +359,7 @@ export default function CreateExamPage() {
     // Hard-blocked for Old Past Exams — the backend enforces this too, but
     // the saved value should reflect reality rather than a checkbox the UI
     // has since disabled.
-    randomize_questions: objectiveCategory === "old_past" ? false : randomizeQuestions,
+    randomize_questions: objectiveCategory === "past_year" ? false : randomizeQuestions,
     randomize_options: randomizeOptions,
     start_time: toIso(startTime),
     end_time: toIso(endTime),
@@ -283,6 +436,11 @@ export default function CreateExamPage() {
       setStep(2);
       return null;
     }
+    if (examType === "subject" && (!courseId || !subjectId || !topicId)) {
+      toast.error("Choose a course, subject, and topic for a Topicwise Test.");
+      setStep(2);
+      return null;
+    }
 
     setSaving(true);
     try {
@@ -292,7 +450,10 @@ export default function CreateExamPage() {
         if (!opts.silent) toast.success("Draft saved");
         return examId;
       }
-      const created = await adminExamApi.createExam(payload);
+      const created = await adminExamApi.createExam({
+        ...payload,
+        ...(subjectiveRequestId ? { request_id: subjectiveRequestId } : {}),
+      } as Partial<Examination> & { request_id?: number });
       setExamId(created.id);
       // Put the id in the URL so a refresh recovers the draft.
       router.replace(`/admin-dashboard/exams/new?draft=${created.id}`);
@@ -394,7 +555,16 @@ export default function CreateExamPage() {
       {/* Stepper */}
       <div className="bg-white border border-slate-200 rounded-xl p-4">
         <div className="flex flex-wrap items-center gap-3">
-          {STEPS.map((s) => (s.id === 3 && examType === "subjective" ? { ...s, title: "Question Paper" } : s)).map((s, i) => {
+          {[
+            { id: 1, title: "Basic Information", icon: FileText },
+            { id: 2, title: "Academic Targeting", icon: Target },
+            {
+              id: 3,
+              title: majorType === "subjective" ? "Question Paper (PDF)" : "Question Selection",
+              icon: majorType === "subjective" ? FileUp : LayoutList,
+            },
+            { id: 4, title: "Configuration", icon: Settings },
+          ].map((s, i, arr) => {
             const active = step === s.id;
             const done = step > s.id;
             // Step 3 is unreachable until a draft exists to attach questions to.
@@ -420,7 +590,7 @@ export default function CreateExamPage() {
                     </span>
                   </span>
                 </button>
-                {i < STEPS.length - 1 && <div className="flex-1 h-px bg-slate-200 min-w-[12px]" />}
+                {i < arr.length - 1 && <div className="flex-1 h-px bg-slate-200 min-w-[12px]" />}
               </React.Fragment>
             );
           })}
@@ -440,44 +610,155 @@ export default function CreateExamPage() {
 
       {/* ── Step 1 ─────────────────────────────────────────────────────────── */}
       {step === 1 && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-          <h2 className="font-bold text-[#0B2545]">Basic Information</h2>
+        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
+          <h2 className="font-bold text-[#0B2545] text-lg">Basic Information</h2>
           <div>
             <label className={label}>Exam Title *</label>
-            <input value={title} onChange={e => setTitle(e.target.value)} className={field}
-              placeholder="e.g. Loksewa Section Officer — Full Mock Test 1" />
-          </div>
-          <div>
-            <label className={label}>Exam Type *</label>
-            <select value={examType} onChange={e => setExamType(e.target.value as ExaminationType)} className={field}>
-              {EXAM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className={label}>Objective Exam Category</label>
-            <select
-              value={objectiveCategory}
-              onChange={e => setObjectiveCategory(e.target.value as typeof objectiveCategory)}
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
               className={field}
-            >
-              <option value="">Not applicable (e.g. subjective exam)</option>
-              {OBJECTIVE_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-            </select>
-            {objectiveCategory && (
-              <p className="text-xs text-slate-500 mt-1.5">
-                {OBJECTIVE_CATEGORIES.find(c => c.value === objectiveCategory)?.hint}
-              </p>
-            )}
+              placeholder={
+                majorType === "topicwise"
+                  ? "e.g. Governance & Constitution — Topicwise Test 1"
+                  : majorType === "subjective"
+                  ? "e.g. Section Officer Paper II — Public Administration Subjective"
+                  : "e.g. Loksewa Section Officer — Full Mock Test 1"
+              }
+            />
           </div>
+
+          <div>
+            <label className={label}>Major Exam Type *</label>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+              {[
+                {
+                  id: "topicwise" as const,
+                  title: "Topicwise Test",
+                  desc: "Focused single-topic practice test attached to specific syllabus chapters.",
+                  icon: Target,
+                  badge: "Topic-Scoped",
+                  badgeCls: "bg-blue-100 text-blue-800",
+                },
+                {
+                  id: "objective" as const,
+                  title: "Objective Exam",
+                  desc: "Standard MCQ examinations including Model, Past Year, Live, and Full-Length exams.",
+                  icon: LayoutList,
+                  badge: "Multiple Choice",
+                  badgeCls: "bg-emerald-100 text-emerald-800",
+                },
+                {
+                  id: "subjective" as const,
+                  title: "Subjective Exam",
+                  desc: "Written paper with official PDF question paper and handwritten answer sheet submissions.",
+                  icon: FileText,
+                  badge: "PDF / Written",
+                  badgeCls: "bg-purple-100 text-purple-800",
+                },
+              ].map((item) => {
+                const isSelected = majorType === item.id;
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setMajorType(item.id);
+                      if (item.id === "topicwise") {
+                        setExamType("subject");
+                        setObjectiveCategory("");
+                      } else if (item.id === "subjective") {
+                        setExamType("subjective");
+                        setObjectiveCategory("");
+                      } else {
+                        setExamType("mock");
+                        setObjectiveCategory("model");
+                      }
+                    }}
+                    className={`text-left p-4 rounded-xl border-2 transition-all flex flex-col justify-between ${
+                      isSelected
+                        ? "border-[#0B2545] bg-[#0B2545]/5 shadow-sm ring-1 ring-[#0B2545]"
+                        : "border-slate-200 hover:border-slate-300 bg-white"
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className={`p-2 rounded-lg ${isSelected ? "bg-[#0B2545] text-white" : "bg-slate-100 text-slate-600"}`}>
+                          <Icon className="w-5 h-5" />
+                        </div>
+                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${item.badgeCls}`}>
+                          {item.badge}
+                        </span>
+                      </div>
+                      <h3 className="font-bold text-slate-900 text-base">{item.title}</h3>
+                      <p className="text-xs text-slate-500 mt-1 leading-relaxed">{item.desc}</p>
+                    </div>
+                    {isSelected && (
+                      <div className="mt-3 flex items-center gap-1.5 text-xs font-semibold text-[#0B2545]">
+                        <Check className="w-3.5 h-3.5" /> Selected
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Objective Sub-Category Selector (ONLY when Objective Exam is selected) */}
+          {majorType === "objective" && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+              <label className={label}>Objective Exam Subtype *</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {[
+                  { examType: "mock" as const, cat: "model" as const, label: "Model Exam", hint: "Standard timed practice exam." },
+                  { examType: "mock" as const, cat: "past_year" as const, label: "Past Year Paper", hint: "Historical paper with fixed question order." },
+                  { examType: "mock" as const, cat: "live" as const, label: "Live Exam", hint: "Synchronous scheduled exam window." },
+                ].map((subtype) => {
+                  const active = examType === subtype.examType && objectiveCategory === subtype.cat;
+                  return (
+                    <button
+                      key={subtype.label}
+                      type="button"
+                      onClick={() => {
+                        setExamType(subtype.examType);
+                        setObjectiveCategory(subtype.cat);
+                      }}
+                      className={`p-3 rounded-lg border text-left transition-all ${
+                        active
+                          ? "border-emerald-600 bg-white ring-2 ring-emerald-600/20 shadow-sm"
+                          : "border-slate-200 bg-white hover:border-slate-300"
+                      }`}
+                    >
+                      <div className="font-semibold text-xs text-slate-900">{subtype.label}</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">{subtype.hint}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className={label}>Description</label>
-            <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3}
-              className={`${field} resize-y`} placeholder="Shown to students in the exam list." />
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              className={`${field} resize-y`}
+              placeholder="Shown to students in the exam catalog and dashboard."
+            />
           </div>
+
           <div>
             <label className={label}>Instructions</label>
-            <textarea value={instructions} onChange={e => setInstructions(e.target.value)} rows={4}
-              className={`${field} resize-y`} placeholder="Rules shown before the exam starts." />
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              rows={4}
+              className={`${field} resize-y`}
+              placeholder="Rules and guidelines shown to students before beginning the exam."
+            />
           </div>
         </div>
       )}
@@ -491,18 +772,40 @@ export default function CreateExamPage() {
               This scopes the Master Question Bank in the next step.
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <label className={label}>Course {examType === "subject" ? "*" : ""}</label>
+              <select
+                value={courseId ?? ""}
+                onChange={(event) => {
+                  const nextId = event.target.value ? Number(event.target.value) : undefined;
+                  const selectedCourse = courseOptions.find((course) => course.id === nextId);
+                  setCourseId(nextId);
+                  setCategoryId(selectedCourse?.exam?.category_id ?? undefined);
+                  setPositionId(selectedCourse?.exam?.id);
+                  setSubjectId(undefined);
+                  setChapterId(undefined);
+                  setTopicId(undefined);
+                }}
+                disabled={academicLoading.courses}
+                className={`${field} disabled:bg-slate-50`}
+              >
+                <option value="">{academicLoading.courses ? "Loading courses..." : "Select course"}</option>
+                {courseOptions.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}
+              </select>
+            </div>
             <div>
               <label className={label}>Exam Category *</label>
               <select
                 value={categoryId ?? ""}
                 onChange={e => {
                   setCategoryId(e.target.value ? Number(e.target.value) : undefined);
-                  setPositionId(undefined); setSubjectId(undefined);
+                  setPositionId(undefined); setSubjectId(undefined); setChapterId(undefined); setTopicId(undefined);
                 }}
-                className={field}
+                disabled={academicLoading.categories || (examType === "subject" && !!courseId)}
+                className={`${field} disabled:bg-slate-50`}
               >
-                <option value="">Select category</option>
+                <option value="">{academicLoading.categories ? "Loading categories..." : "Select category"}</option>
                 {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
@@ -510,11 +813,11 @@ export default function CreateExamPage() {
               <label className={label}>Position / Level *</label>
               <select
                 value={positionId ?? ""}
-                onChange={e => { setPositionId(e.target.value ? Number(e.target.value) : undefined); setSubjectId(undefined); }}
-                disabled={!categoryId}
+                onChange={e => { setPositionId(e.target.value ? Number(e.target.value) : undefined); setSubjectId(undefined); setChapterId(undefined); setTopicId(undefined); }}
+                disabled={!categoryId || academicLoading.positions || (examType === "subject" && !!courseId)}
                 className={`${field} disabled:bg-slate-50`}
               >
-                <option value="">Select position</option>
+                <option value="">{!categoryId ? "Select category first" : academicLoading.positions ? "Loading positions..." : "Select position"}</option>
                 {positions.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </div>
@@ -524,14 +827,42 @@ export default function CreateExamPage() {
               </label>
               <select
                 value={subjectId ?? ""}
-                onChange={e => setSubjectId(e.target.value ? Number(e.target.value) : undefined)}
-                disabled={!positionId}
+                onChange={e => { setSubjectId(e.target.value ? Number(e.target.value) : undefined); setChapterId(undefined); setTopicId(undefined); }}
+                disabled={!positionId || academicLoading.subjects}
                 className={`${field} disabled:bg-slate-50`}
               >
-                <option value="">{examType === "subjective" ? "Select subject (Optional)" : "All subjects"}</option>
+                <option value="">{!positionId ? "Select position first" : academicLoading.subjects ? "Loading subjects..." : examType === "subjective" ? "Select subject (Optional)" : "All subjects"}</option>
                 {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>
+            {majorType !== "subjective" && (
+              <>
+                <div>
+                  <label className={label}>Chapter</label>
+                  <select
+                    value={chapterId ?? ""}
+                    onChange={(event) => { setChapterId(event.target.value ? Number(event.target.value) : undefined); setTopicId(undefined); }}
+                    disabled={!subjectId}
+                    className={`${field} disabled:bg-slate-50`}
+                  >
+                    <option value="">{subjectId ? "Select chapter" : "Select subject first"}</option>
+                    {chapters.map((chapter: any) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={label}>Topic {examType === "subject" ? "*" : ""}</label>
+                  <select
+                    value={topicId ?? ""}
+                    onChange={(event) => setTopicId(event.target.value ? Number(event.target.value) : undefined)}
+                    disabled={!chapterId}
+                    className={`${field} disabled:bg-slate-50`}
+                  >
+                    <option value="">{chapterId ? "Select topic" : "Select chapter first"}</option>
+                    {topics.map((topic: any) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}
+                  </select>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -729,11 +1060,11 @@ export default function CreateExamPage() {
                   <label className={label}>Evaluation Workflow</label>
                   <select
                     value={evaluationType}
-                    onChange={(e) => setEvaluationType(e.target.value as any)}
+                    onChange={(e) => setEvaluationType(e.target.value as "admin" | "ai" | "hybrid")}
                     className={field}
                   >
-                    <option value="manual">Manual Examiner Evaluation</option>
-                    <option value="ai_assisted">AI-Assisted OCR + Examiner Verification</option>
+                    <option value="admin">Manual Examiner Evaluation</option>
+                    <option value="ai">AI-Assisted OCR + Examiner Verification</option>
                     <option value="hybrid">Hybrid (AI First Pass + Manual Review)</option>
                   </select>
                 </div>
@@ -744,6 +1075,7 @@ export default function CreateExamPage() {
           <QuestionSelectionWorkspace
             examinationId={examId}
             defaultSubjectId={subjectId ?? null}
+            defaultTopicId={topicId ?? null}
             defaultCollectionId={defaultCollectionId}
             onSelectionChange={handleSelectionChange}
           />
@@ -907,7 +1239,7 @@ export default function CreateExamPage() {
                       "Randomize question order",
                       randomizeQuestions,
                       setRandomizeQuestions,
-                      objectiveCategory === "old_past"
+                      objectiveCategory === "past_year"
                         ? "Old Past Exams must keep their original, fixed question order."
                         : null,
                     ],

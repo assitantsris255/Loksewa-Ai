@@ -3,6 +3,7 @@ import { apiClient } from "./client";
 export interface OfficialExamSchedule {
   id: number;
   title: string;
+  exam_type?: "all" | "topicwise" | "objective" | "subjective";
   exam_category: number | null;
   category_name?: string | null;
   exam: number | null;
@@ -71,11 +72,13 @@ export const schedulesApi = {
     search?: string;
     is_published?: boolean;
     is_active?: boolean;
+    exam_type?: string;
   }): Promise<OfficialExamSchedule[]> => {
     const query = new URLSearchParams();
     if (params?.search) query.append("search", params.search);
     if (params?.is_published !== undefined) query.append("is_published", String(params.is_published));
     if (params?.is_active !== undefined) query.append("is_active", String(params.is_active));
+    if (params?.exam_type && params.exam_type !== "all") query.append("exam_type", params.exam_type);
     const queryString = query.toString();
     const url = queryString ? `/admin/schedules/?${queryString}` : "/admin/schedules/";
     const res = await apiClient<any>(url);

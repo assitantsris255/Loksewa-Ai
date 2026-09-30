@@ -107,7 +107,13 @@ class ExamSerializer(serializers.ModelSerializer):
                 key=lambda s: s.id,
             )
         else:
-            subjects = Subject.objects.filter(paper__exam=obj).distinct()
+            subjects = list(Subject.objects.filter(paper__exam=obj).distinct())
+
+        if not subjects:
+            fallback = list(Subject.objects.filter(examinations__exam=obj).distinct())
+            if fallback:
+                subjects = sorted(fallback, key=lambda s: s.id)
+
         return SubjectSerializer(subjects, many=True, context=self.context).data
 
 class QuestionFullSerializer(serializers.ModelSerializer):
@@ -212,16 +218,23 @@ class SecureQuestionSerializer(serializers.ModelSerializer):
     """Used for practice sessions to hide correct option and explanation before submission."""
     class Meta:
         model = Question
+        fields = ['id', 'topic', 'text', 'option_a', 'option_b', 'option_c', 'option_d', 'difficulty', 'hint']
+
+class BookmarkQuestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Question
         fields = ['id', 'topic', 'text', 'option_a', 'option_b', 'option_c', 'option_d', 'difficulty']
 
+
 class BookmarkSerializer(serializers.ModelSerializer):
-    question_detail = QuestionFullSerializer(source='question', read_only=True)
+    question_detail = BookmarkQuestionSerializer(source='question', read_only=True)
+    saved_at = serializers.DateTimeField(source='created_at', read_only=True)
 
     class Meta:
         from .models import Bookmark
         model = Bookmark
-        fields = ['id', 'question', 'question_detail', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'question', 'question_detail', 'created_at', 'saved_at', 'custom_order']
+        read_only_fields = ['id', 'created_at', 'saved_at', 'custom_order']
 
 # ============================================================
 # SUBJECTIVE SERIALIZERS
@@ -379,6 +392,24 @@ class TeacherExaminationSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     exam_name = serializers.CharField(source='exam.name', read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
+    evaluation_type = serializers.ChoiceField(
+        choices=[
+            ('admin', 'Admin Evaluation'),
+            ('manual', 'Manual Examiner Evaluation'),
+            ('ai', 'AI Evaluation'),
+            ('ai_assisted', 'AI-Assisted Evaluation'),
+            ('hybrid', 'Hybrid Evaluation'),
+        ],
+        required=False,
+        default='admin',
+    )
+
+    def validate_evaluation_type(self, value):
+        if value == 'manual':
+            return 'admin'
+        if value == 'ai_assisted':
+            return 'ai'
+        return value
 
     class Meta:
         from .models import Examination
@@ -523,6 +554,8 @@ class AdminSubjectiveSubmissionListSerializer(serializers.ModelSerializer):
     total_marks = serializers.SerializerMethodField()
     percentage = serializers.SerializerMethodField()
     has_answer_pdf = serializers.SerializerMethodField()
+    is_pdf = serializers.SerializerMethodField()
+    file_name = serializers.SerializerMethodField()
     evaluator_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -531,8 +564,8 @@ class AdminSubjectiveSubmissionListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'attempt_id', 'student_id', 'student_name', 'student_username', 'student_email',
             'examination_id', 'examination_title', 'status', 'attempt_status', 'started_at',
-            'submitted_at', 'page_count', 'file_size_bytes', 'has_answer_pdf', 'score',
-            'total_marks', 'percentage', 'ocr_status', 'evaluator', 'evaluator_name',
+            'submitted_at', 'page_count', 'file_size_bytes', 'has_answer_pdf', 'is_pdf', 'file_name',
+            'score', 'total_marks', 'percentage', 'ocr_status', 'evaluator', 'evaluator_name',
             'evaluated_at', 'is_published', 'published_at', 'created_at', 'updated_at'
         ]
 
@@ -542,6 +575,17 @@ class AdminSubjectiveSubmissionListSerializer(serializers.ModelSerializer):
 
     def get_has_answer_pdf(self, obj):
         return bool(obj.answer_pdf)
+
+    def get_is_pdf(self, obj):
+        return bool(obj.answer_pdf)
+
+    def get_file_name(self, obj):
+        import os
+        if obj.answer_pdf:
+            return os.path.basename(obj.answer_pdf.name)
+        elif obj.pages.exists():
+            return f"{obj.page_count or obj.pages.count()} Image Page(s)"
+        return "No File"
 
     def get_evaluator_name(self, obj):
         if obj.evaluator:
@@ -584,6 +628,8 @@ class AdminSubjectiveSubmissionDetailSerializer(serializers.ModelSerializer):
     total_marks = serializers.SerializerMethodField()
     percentage = serializers.SerializerMethodField()
     has_answer_pdf = serializers.SerializerMethodField()
+    is_pdf = serializers.SerializerMethodField()
+    file_name = serializers.SerializerMethodField()
     evaluator_name = serializers.SerializerMethodField()
     pages = SubjectiveSubmissionPageSerializer(many=True, read_only=True)
     question_scores = serializers.SerializerMethodField()
@@ -595,10 +641,22 @@ class AdminSubjectiveSubmissionDetailSerializer(serializers.ModelSerializer):
             'id', 'attempt_id', 'student_id', 'student_name', 'student_username', 'student_email',
             'examination_id', 'examination_title', 'status', 'attempt_status', 'started_at',
             'submitted_at', 'time_taken_seconds', 'page_count', 'file_size_bytes', 'has_answer_pdf',
-            'raw_ocr_text', 'extracted_text', 'ocr_status', 'ocr_error', 'score', 'total_marks',
-            'percentage', 'evaluator', 'evaluator_name', 'evaluator_feedback', 'evaluated_at',
-            'is_published', 'published_at', 'pages', 'question_scores', 'created_at', 'updated_at'
+            'is_pdf', 'file_name', 'raw_ocr_text', 'extracted_text', 'ocr_status', 'ocr_error',
+            'score', 'total_marks', 'percentage', 'evaluator', 'evaluator_name', 'evaluator_feedback',
+            'evaluated_at', 'is_published', 'published_at', 'pages', 'question_scores', 'created_at',
+            'updated_at'
         ]
+
+    def get_is_pdf(self, obj):
+        return bool(obj.answer_pdf)
+
+    def get_file_name(self, obj):
+        import os
+        if obj.answer_pdf:
+            return os.path.basename(obj.answer_pdf.name)
+        elif obj.pages.exists():
+            return f"{obj.page_count or obj.pages.count()} Image Page(s)"
+        return "No File"
 
     def get_student_name(self, obj):
         student = obj.attempt.student

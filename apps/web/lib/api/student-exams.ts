@@ -2,7 +2,7 @@ import { apiClient } from './client';
 
 /** Examination.OBJECTIVE_CATEGORIES in exams/models.py — the four finalized
  * Objective Exam categories. May be null on older/uncategorized exams. */
-export type ObjectiveCategory = "old_past" | "model" | "live" | "custom" | null;
+export type ObjectiveCategory = "past_year" | "model" | "live" | "topicwise" | null;
 
 export interface StudentExam {
   id: number;
@@ -18,6 +18,8 @@ export interface StudentExam {
   course_title?: string | null;
   exam_name: string;
   subject_name: string;
+  topic_id?: number | null;
+  topic_name?: string | null;
   instructions: string;
   thumbnail: string | null;
   total_questions: number;
@@ -38,6 +40,43 @@ export interface StudentExam {
   active_attempt_id?: number | null;
   can_start?: boolean;
   start_blocked_reason?: string | null;
+}
+
+export interface ExaminationRequest {
+  id: number;
+  request_type: "exam_access" | "subjective_live";
+  student: number;
+  student_name: string;
+  examination: number;
+  examination_title: string;
+  academic_exam: number | null;
+  requested_exam_name: string | null;
+  course: number | null;
+  requested_course_title: string | null;
+  subject: number | null;
+  requested_subject_name: string | null;
+  topic: number | null;
+  requested_topic_name: string | null;
+  status: "pending" | "approved" | "rejected";
+  rejection_reason: string;
+  reviewed_by: number | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+export interface ExpertSolution {
+  id: number;
+  text: string;
+  question_type: string;
+  option_a: string | null;
+  option_b: string | null;
+  option_c: string | null;
+  option_d: string | null;
+  correct_option: string | null;
+  explanation: string;
+  model_answer: string;
+  marks: number;
 }
 
 
@@ -206,6 +245,12 @@ export const studentExamsApi = {
     const url = courseId ? `/student/exams/?course_id=${courseId}` : '/student/exams/';
     return await apiClient<StudentExam[]>(url);
   },
+
+  getTopicwiseTests: async (courseId?: number) => {
+    const params = new URLSearchParams({ topicwise: 'true' });
+    if (courseId != null) params.set('course_id', String(courseId));
+    return apiClient<StudentExam[]>(`/student/exams/?${params.toString()}`);
+  },
   
   getPastResults: async () => {
     // StudentExaminationAttemptViewSet sets pagination_class =
@@ -221,6 +266,29 @@ export const studentExamsApi = {
   getExamDetails: async (id: number) => {
     return await apiClient<StudentExam>(`/student/exams/${id}/`);
   },
+
+  getExamRequests: () => apiClient<ExaminationRequest[]>("/student/exam-requests/"),
+
+  requestSubjectiveExam: (payload: {
+    academic_exam: number;
+    course?: number;
+    subject?: number;
+    topic?: number;
+  }) => apiClient<ExaminationRequest>("/student/exam-requests/", {
+    method: "POST",
+    body: JSON.stringify({ request_type: "subjective_live", ...payload }),
+  }),
+
+  requestExamAccess: (examinationId: number) => apiClient<ExaminationRequest>("/student/exam-requests/", {
+    method: "POST",
+    body: JSON.stringify({ examination: examinationId }),
+  }),
+
+  getExpertSolution: (examinationId: number) => apiClient<{
+    examination: number;
+    title: string;
+    solutions: ExpertSolution[];
+  }>(`/student/exams/${examinationId}/expert-solution/`),
   
   generateCustomExam: async (params: CustomExamParams) => {
     return await apiClient<StudentExamAttempt>('/student/exams/generate_custom/', {

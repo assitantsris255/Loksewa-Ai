@@ -102,7 +102,7 @@ export function practiceError(err: unknown, context: PracticeErrorContext = "loa
         return { kind: "completed", message: COMPLETED_MESSAGE, retryable: false };
       }
       if (detail.includes("no approved questions") || detail.includes("no revision questions")
-        || detail.includes("no practice questions")) {
+        || detail.includes("no practice questions") || detail.includes("no saved questions")) {
         return { kind: "no-questions", message: NO_QUESTIONS_MESSAGE, retryable: false };
       }
       return { kind: "other", message: FALLBACK[context], retryable: true };

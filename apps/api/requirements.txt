@@ -92,6 +92,11 @@ redis==8.1.0
 # .xlsx template/error report.
 openpyxl==3.1.5
 
+# -- PDF generation ------------------------------------------------------------
+# Creates printable subjective examination question papers from the approved
+# Question Bank and stores them through the Examination FileField storage.
+reportlab==5.0.1
+
 # -- Error monitoring (Sentry) -------------------------------------------------
 # sentry-sdk: reports unhandled exceptions in real time. Wired in
 # backend/settings.py, gated on SENTRY_DSN being set - with it unset

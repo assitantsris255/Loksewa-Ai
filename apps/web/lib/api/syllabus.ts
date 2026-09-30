@@ -45,8 +45,9 @@ export interface Exam {
 }
 
 export const syllabusApi = {
-  getExams: async (): Promise<Exam[]> => {
-    return apiClient<Exam[]>("/exams/");
+  getExams: async (courseId?: number | null): Promise<Exam[]> => {
+    const query = courseId == null ? "" : `?course_id=${courseId}`;
+    return apiClient<Exam[]>(`/exams/${query}`);
   },
   
   getExam: async (id: number): Promise<Exam> => {

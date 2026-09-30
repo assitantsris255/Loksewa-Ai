@@ -73,7 +73,12 @@ from .question_views import AdminQuestionViewSet
 from .import_views import QuestionImportViewSet
 from .question_set_views import QuestionSetViewSet
 from .collection_views import QuestionCollectionViewSet
-from .exam_views import ExaminationViewSet, AdminSubjectiveSubmissionViewSet
+from .exam_views import (
+    ExaminationViewSet,
+    AdminSubjectiveSubmissionViewSet,
+    AdminExaminationRequestViewSet,
+    SubjectiveQuestionSetViewSet,
+)
 from .study_plan_views import AdminStudyPlanTemplateViewSet
 from .leaderboard_views import AdminLeaderboardView
 from study_plan import admin_api as study_plan_admin
@@ -97,6 +102,8 @@ router.register(r'questions/import', QuestionImportViewSet, basename='admin-ques
 router.register(r'question-sets', QuestionSetViewSet, basename='admin-question-set')
 router.register(r'collections', QuestionCollectionViewSet, basename='admin-collection')
 router.register(r'exams', ExaminationViewSet, basename='admin-examination')
+router.register(r'exam-requests', AdminExaminationRequestViewSet, basename='admin-exam-request')
+router.register(r'subjective-question-sets', SubjectiveQuestionSetViewSet, basename='admin-subjective-question-set')
 router.register(r'subjective-submissions', AdminSubjectiveSubmissionViewSet, basename='admin-subjective-submissions')
 router.register(r'schedules', AdminExamScheduleViewSet, basename='admin-exam-schedules')
 router.register(r'testimonials', AdminTestimonialViewSet, basename='admin-testimonials')

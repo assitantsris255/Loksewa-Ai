@@ -70,12 +70,18 @@ def _selection_kwargs(request, examination):
     the examination's own academic targeting so the bank is scoped sensibly
     even before the admin narrows it further."""
     params = request.query_params if request.method == 'GET' else request.data
+    requested_topic_id = _int_or_none(params.get('topic'))
+    topic_id = (
+        examination.topic_id
+        if examination.exam_type == 'subject' and examination.topic_id
+        else requested_topic_id
+    )
     return {
         'exam_id': _int_or_none(params.get('exam')) or examination.exam_id,
         'paper_id': _int_or_none(params.get('paper')),
         'subject_id': _int_or_none(params.get('subject')) or examination.subject_id,
         'chapter_id': _int_or_none(params.get('chapter')),
-        'topic_id': _int_or_none(params.get('topic')),
+        'topic_id': topic_id,
         'question_type': (params.get('question_type') or '').strip() or None,
         'tags': (params.get('tags') or '').strip() or None,
         # "Use in Mock Exam" from the admin Collections page - narrows the
@@ -222,9 +228,15 @@ class ExaminationQuestionMixin:
             return Response({'error': 'question_ids must be a non-empty list.'},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        approved = list(Question.objects.filter(
+        approved_qs = Question.objects.filter(
             id__in=ids, status=QuestionSelectionService.APPROVED_STATUS
-        ))
+        )
+        if examination.exam_type == 'subject' and examination.topic_id:
+            approved_qs = approved_qs.filter(
+                topic_id=examination.topic_id,
+                question_type__in=Question.OBJECTIVE_TYPES,
+            )
+        approved = list(approved_qs)
         approved_by_id = {q.id: q for q in approved}
 
         rejected = [i for i in ids if i not in approved_by_id]

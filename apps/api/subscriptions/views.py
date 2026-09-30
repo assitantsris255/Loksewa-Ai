@@ -4,12 +4,16 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from datetime import timedelta
 import uuid
 
 from .models import SubscriptionPlan, Subscription, SubscriptionPayment, Invoice
+from .models import SubscriptionCourseSelection
 from core.models import Notification
+from administration.models import AuditLog
+from courses.models import Course, CourseApplication, Enrollment
 from .serializers import (
     SubscriptionPlanSerializer, SubscriptionSerializer,
     SubscriptionPaymentSerializer, NotificationSerializer, InvoiceSerializer
@@ -39,6 +43,48 @@ class SubscriptionPlanViewSet(viewsets.ModelViewSet):
         if not (user and user.is_authenticated and user.role in ('admin', 'super-admin')):
             qs = qs.filter(status='ACTIVE')
         return qs
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        plan = self.get_object()
+        course_ids = set(plan.eligible_courses.values_list('id', flat=True))
+        if plan.course_id:
+            course_ids.add(plan.course_id)
+
+        dependencies = {
+            'subscriptions': Subscription.objects.filter(plan=plan).count(),
+            'payments': SubscriptionPayment.objects.filter(plan=plan).count(),
+            'course_selections': SubscriptionCourseSelection.objects.filter(
+                Q(payment__plan=plan) | Q(subscription__plan=plan)
+            ).count(),
+            'enrollments': Enrollment.objects.filter(course_id__in=course_ids).count(),
+            'course_applications': CourseApplication.objects.filter(
+                subscription_payment__plan=plan
+            ).count(),
+            'audit_records': AuditLog.objects.filter(entity_id=str(plan.pk)).filter(
+                Q(entity_type__icontains='package')
+                | Q(entity_type__icontains='subscriptionplan')
+                | Q(entity_type__icontains='subscription plan')
+            ).count(),
+        }
+
+        if any(dependencies.values()):
+            plan.status = 'ARCHIVED'
+            plan.save(update_fields=('status', 'updated_at'))
+            return Response({
+                'deleted': False,
+                'archived': True,
+                'message': 'Package archived because historical records depend on it.',
+                'dependencies': dependencies,
+            }, status=status.HTTP_200_OK)
+
+        plan.delete()
+        return Response({
+            'deleted': True,
+            'archived': False,
+            'message': 'Package permanently deleted.',
+            'dependencies': dependencies,
+        }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'], url_path='available')
     def available(self, request):
@@ -170,6 +216,8 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         from rest_framework.exceptions import ValidationError
         plan = serializer.validated_data['plan']
+        if plan.status != 'ACTIVE':
+            raise ValidationError({'plan': 'This package is no longer available for purchase.'})
 
         # Prevent duplicate pending payment for the same plan
         existing_pending = SubscriptionPayment.objects.filter(

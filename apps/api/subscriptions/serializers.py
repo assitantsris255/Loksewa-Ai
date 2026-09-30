@@ -65,9 +65,37 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
         return self._format_course_detail(c_full)
 
     def validate(self, data):
+        if (
+            self.instance
+            and self.instance.status == 'ARCHIVED'
+            and data.get('status') not in (None, 'ARCHIVED')
+        ):
+            raise serializers.ValidationError({
+                'status': 'Archived packages cannot be republished.'
+            })
+
         package_type = data.get('package_type', getattr(self.instance, 'package_type', 'SINGLE'))
         course = data.get('course', getattr(self.instance, 'course', None))
         eligible_courses = data.get('eligible_courses')
+
+        selected_courses = []
+        if 'course' in data and data['course']:
+            selected_courses.append(data['course'])
+        if 'eligible_courses' in data:
+            selected_courses.extend(data['eligible_courses'])
+        for selected_course in {item.pk: item for item in selected_courses}.values():
+            exam = selected_course.exam
+            if selected_course.status != 'published' or not exam:
+                raise serializers.ValidationError({
+                    'eligible_courses': 'Packages can only grant access to published Courses linked to the active academic hierarchy.'
+                })
+            node = exam
+            while node:
+                if node.status != 'active' or not node.category.is_active:
+                    raise serializers.ValidationError({
+                        'eligible_courses': 'Coming Soon or inactive academic nodes cannot be included in packages.'
+                    })
+                node = node.parent
 
         if package_type == 'SINGLE':
             # Sync course and eligible_courses if either is provided
@@ -84,6 +112,7 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({"allowed_preparation_count": "Allowed preparations must be at least 1."})
         elif package_type == 'ALL_ACCESS':
             data['course'] = None
+            data['eligible_courses'] = []
 
         return data
 

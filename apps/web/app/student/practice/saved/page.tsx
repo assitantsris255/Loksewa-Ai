@@ -1,123 +1,213 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { practiceApi, SavedQuestion } from "@/lib/api/practice";
-import { Loader2, Star, BookOpen } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, ArrowDown, ArrowLeft, ArrowUp, Bookmark, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useOptionalStudentContext } from "@/contexts/StudentContext";
+import { practiceApi, SavedQuestion, StudyPage } from "@/lib/api/practice";
+import { practiceError, practiceErrorMessage, PracticeError } from "@/lib/practice-errors";
+import { useSavedQuestions, practiceResultKey } from "@/lib/practice-hooks";
+import { QuestionSkeleton, TopicPracticeBrowser } from "@/components/practice/TopicPracticeBrowser";
 
 export default function SavedQuestionsPage() {
-  const [loading, setLoading] = useState(true);
-  const [saved, setSaved] = useState<SavedQuestion[]>([]);
-  const [revealed, setRevealed] = useState<Record<number, boolean>>({});
-  const [removing, setRemoving] = useState<Record<number, boolean>>({});
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const studentCtx = useOptionalStudentContext();
+  const courseId = studentCtx?.activeCourse?.id ?? null;
+  const {
+    savedIds,
+    savedQuestions,
+    toggle,
+    isError: savedError,
+    refetch: refetchSaved,
+  } = useSavedQuestions();
+  const [session, setSession] = useState<StudyPage | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [empty, setEmpty] = useState(false);
+  const [error, setError] = useState<PracticeError | null>(null);
+  const [orderDraft, setOrderDraft] = useState<SavedQuestion[] | null>(null);
+  const [savingOrder, setSavingOrder] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
 
-  useEffect(() => {
-    practiceApi.listSavedQuestions()
-      .then(setSaved)
-      .catch(e => console.error(e))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const handleRemove = async (item: SavedQuestion) => {
-    setRemoving(prev => ({ ...prev, [item.id]: true }));
+  const start = async () => {
+    setLoading(true);
+    setError(null);
+    setEmpty(false);
     try {
-      await practiceApi.toggleBookmark(item.question);
-      setSaved(prev => prev.filter(s => s.id !== item.id));
-    } catch (e) {
-      console.error(e);
-      setRemoving(prev => ({ ...prev, [item.id]: false }));
+      setSession(await practiceApi.startSavedSession(courseId));
+    } catch (cause) {
+      const nextError = practiceError(cause, "start");
+      if (nextError.kind === "no-questions") setEmpty(true);
+      else setError(nextError);
+    } finally {
+      setLoading(false);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-primary dark:text-foreground" />
+  useEffect(() => {
+    if (studentCtx?.isLoading) return;
+    setSession(null);
+    void start();
+    // Start a new course-scoped saved session after an active-course change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseId, studentCtx?.isLoading]);
+
+  const title = (
+    <div className="flex items-center gap-3">
+      <Bookmark className="h-6 w-6 text-amber-600" aria-hidden="true" />
+      <div>
+        <h1 className="text-2xl font-bold text-primary dark:text-foreground">Saved Questions</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Practice your saved questions from this course.</p>
       </div>
+    </div>
+  );
+
+  const orderedBookmarks = orderDraft ?? savedQuestions;
+  const hasCustomOrder = savedQuestions.some((bookmark) => bookmark.custom_order !== null);
+  const orderChanged = !!orderDraft && orderDraft.some((bookmark, index) => bookmark.id !== savedQuestions[index]?.id);
+
+  const moveBookmark = (index: number, offset: number) => {
+    if (!orderDraft) return;
+    const target = index + offset;
+    if (target < 0 || target >= orderDraft.length) return;
+    const next = [...orderDraft];
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    setOrderDraft(next);
+  };
+
+  const saveOrder = async () => {
+    if (!orderDraft || !orderChanged) return;
+    setSavingOrder(true);
+    setOrderError(null);
+    try {
+      await practiceApi.orderSavedQuestions(orderDraft.map((bookmark) => bookmark.id), courseId);
+      setOrderDraft(null);
+      await refetchSaved();
+    } catch (cause) {
+      setOrderError(practiceErrorMessage(cause, "save"));
+    } finally {
+      setSavingOrder(false);
+    }
+  };
+
+  const resetOrder = async () => {
+    setSavingOrder(true);
+    setOrderError(null);
+    try {
+      await practiceApi.resetSavedQuestionOrder(courseId);
+      setOrderDraft(null);
+      await refetchSaved();
+    } catch (cause) {
+      setOrderError(practiceErrorMessage(cause, "save"));
+    } finally {
+      setSavingOrder(false);
+    }
+  };
+
+  if (loading && !session) {
+    return <main className="mx-auto max-w-[900px] space-y-6 px-4 py-8 md:px-8" aria-busy="true">{title}<QuestionSkeleton count={3} /></main>;
+  }
+
+  if (empty && !session) {
+    return (
+      <main className="mx-auto max-w-[760px] space-y-6 px-4 py-8 md:px-8">
+        <Button variant="ghost" size="sm" onClick={() => router.push("/student/practice")}><ArrowLeft className="mr-2 h-4 w-4" />Practice</Button>
+        {title}
+        <section className="border-y border-border py-10 text-center">
+          <p className="font-semibold text-primary dark:text-foreground">No saved questions yet.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Save questions while studying to find them here.</p>
+        </section>
+      </main>
     );
   }
 
-  return (
-    <div className="p-4 md:p-8 max-w-[900px] mx-auto space-y-8 animate-in fade-in-50 duration-500">
-      <div>
-        <h1 className="text-[28px] font-bold tracking-tight text-primary dark:text-foreground flex items-center gap-3">
-          <Star className="w-7 h-7 text-[#D4A72C]" fill="currentColor" /> Saved Questions
-        </h1>
-        <p className="text-muted-foreground mt-1 text-[15px]">
-          Questions you set aside for a second look — even ones you already got right. Saving a question here never affects your weak-topic detection.
-        </p>
-      </div>
-
-      {saved.length === 0 ? (
-        <div className="bg-card rounded-[16px] border border-border shadow-sm p-10 text-center">
-          <BookOpen className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-          <p className="font-semibold text-primary dark:text-foreground">Nothing saved yet</p>
-          <p className="text-muted-foreground text-[14px] mt-1">
-            While practicing, tap <strong>Save for Later</strong> on any question to add it here.
-          </p>
+  if (error && !session) {
+    return (
+      <main className="mx-auto max-w-[760px] space-y-6 px-4 py-8 md:px-8">
+        <Button variant="ghost" size="sm" onClick={() => router.push("/student/practice")}><ArrowLeft className="mr-2 h-4 w-4" />Practice</Button>
+        {title}
+        <div className="flex items-center gap-3 border-y border-red-200 py-5 text-sm text-red-700 dark:border-red-900 dark:text-red-300" role="alert">
+          <AlertCircle className="h-5 w-5 shrink-0" />
+          <span className="flex-1">{error.message}</span>
+          {error.retryable && <Button variant="outline" size="sm" onClick={() => void start()}>Retry</Button>}
         </div>
-      ) : (
-        <div className="space-y-4">
-          {saved.map(item => {
-            const q = item.question_detail;
-            const isRevealed = revealed[item.id];
-            return (
-              <div key={item.id} className="bg-card rounded-[16px] border border-border shadow-sm p-6">
-                <div className="flex justify-between items-start gap-4 mb-4">
-                  <h2 className="text-[16px] font-medium text-primary dark:text-foreground leading-relaxed">
-                    {q.text}
-                  </h2>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleRemove(item)}
-                    disabled={removing[item.id]}
-                    className="shrink-0 text-muted-foreground hover:text-red-500"
-                  >
-                    Remove
-                  </Button>
-                </div>
+      </main>
+    );
+  }
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-                  {(['a', 'b', 'c', 'd'] as const).map(opt => {
-                    const optionText = q[`option_${opt}`];
-                    // correct_option comes back uppercase from the API.
-                    const isCorrect = isRevealed && q.correct_option?.toLowerCase() === opt;
-                    return (
-                      <div
-                        key={opt}
-                        className={`flex items-center p-3 rounded-[10px] border text-[14px] font-medium ${
-                          isCorrect
-                            ? "border-green-300 bg-green-50 text-green-800 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-300"
-                            : "border-border bg-muted/40 text-muted-foreground"
-                        }`}
-                      >
-                        <span className="font-bold mr-2">{opt.toUpperCase()}.</span> {optionText as string}
-                      </div>
-                    );
-                  })}
-                </div>
+  if (!session) return null;
 
-                {isRevealed ? (
-                  q.explanation ? (
-                    <p className="text-[13.5px] text-muted-foreground bg-muted/40 rounded-[10px] p-3">
-                      <strong className="text-primary dark:text-foreground">Explanation: </strong>{q.explanation}
-                    </p>
-                  ) : null
-                ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setRevealed(prev => ({ ...prev, [item.id]: true }))}
-                  >
-                    Show Answer
-                  </Button>
-                )}
-              </div>
-            );
-          })}
+  return (
+    <main className="mx-auto max-w-[1000px] space-y-6 px-4 py-8 md:px-8">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        {title}
+        <Button variant="ghost" size="sm" onClick={() => router.push("/student/practice")}><ArrowLeft className="mr-2 h-4 w-4" />Practice</Button>
+      </div>
+      {savedError && (
+        <div className="flex items-center gap-3 border-y border-red-200 py-3 text-sm text-red-700 dark:border-red-900 dark:text-red-300" role="alert">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span className="flex-1">{practiceErrorMessage(savedError, "load")}</span>
+          <Button variant="outline" size="sm" onClick={() => refetchSaved()}>Retry</Button>
         </div>
       )}
-    </div>
+      {savedQuestions.length > 0 && (
+        <section className="space-y-3 border-y border-border py-4" aria-labelledby="saved-order-heading">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 id="saved-order-heading" className="font-semibold text-primary dark:text-foreground">Saved question order</h2>
+              <p className="text-sm text-muted-foreground">Custom order is used for your next saved-question session. Without one, oldest saved questions come first.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {!orderDraft ? (
+                <Button variant="outline" size="sm" onClick={() => setOrderDraft([...savedQuestions])}>
+                  <ListOrdered className="mr-2 h-4 w-4" />Reorder
+                </Button>
+              ) : (
+                <>
+                  <Button variant="outline" size="sm" disabled={!orderChanged || savingOrder} onClick={() => void saveOrder()}>Save order</Button>
+                  <Button variant="ghost" size="sm" disabled={savingOrder} onClick={() => setOrderDraft(null)}>Cancel</Button>
+                </>
+              )}
+              {hasCustomOrder && (
+                <Button variant="ghost" size="sm" disabled={savingOrder} onClick={() => void resetOrder()}>Reset order</Button>
+              )}
+            </div>
+          </div>
+          {orderError && <p className="text-sm text-red-700 dark:text-red-300" role="alert">{orderError}</p>}
+          {orderDraft && (
+            <ol className="divide-y divide-border border-y border-border">
+              {orderedBookmarks.map((bookmark, index) => (
+                <li key={bookmark.id} className="flex items-center gap-3 py-3">
+                  <span className="w-7 shrink-0 text-sm tabular-nums text-muted-foreground">{index + 1}.</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="line-clamp-2 text-sm font-medium text-primary dark:text-foreground">{bookmark.question_detail.text}</p>
+                    <time className="text-xs text-muted-foreground" dateTime={bookmark.saved_at}>
+                      Saved {new Date(bookmark.saved_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                    </time>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <Button variant="ghost" size="icon" aria-label={`Move saved question ${index + 1} up`} title="Move up" disabled={index === 0 || savingOrder} onClick={() => moveBookmark(index, -1)}><ArrowUp className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" aria-label={`Move saved question ${index + 1} down`} title="Move down" disabled={index === orderedBookmarks.length - 1 || savingOrder} onClick={() => moveBookmark(index, 1)}><ArrowDown className="h-4 w-4" /></Button>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      )}
+      <TopicPracticeBrowser
+        key={session.session.id}
+        initial={session}
+        savedQuestionIds={savedIds}
+        onToggleSave={toggle}
+        onFinish={async () => {
+          const result = await practiceApi.submitSession(session.session.id, 0);
+          queryClient.setQueryData(practiceResultKey(session.session.id), result);
+          router.push(`/student/practice/results/${session.session.id}`);
+        }}
+      />
+    </main>
   );
 }

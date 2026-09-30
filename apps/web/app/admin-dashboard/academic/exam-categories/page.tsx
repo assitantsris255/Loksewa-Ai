@@ -102,7 +102,8 @@ export default function ExamCategoriesPage() {
     if (!selectedCat) return;
     setIsSaving(true);
     try {
-      await adminSyllabusApi.deleteCategory(selectedCat.id);
+      await adminSyllabusApi.deleteCategory(selectedCat.id, true);
+      setCategories((prev) => prev.filter((c) => c.id !== selectedCat.id));
       toast.success(`"${selectedCat.name}" deleted`);
       closeModal();
       await loadData();
@@ -141,21 +142,21 @@ export default function ExamCategoriesPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
           <p className="text-slate-600 text-sm font-medium mb-1">Total Categories</p>
-          <p className="text-2xl font-bold text-[#0B2545]">
+          <div className="text-2xl font-bold text-[#0B2545]">
             {isLoading ? <Skeleton className="h-8 w-14 my-0.5" /> : categories.length}
-          </p>
+          </div>
         </div>
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-emerald-500">
           <p className="text-slate-600 text-sm font-medium mb-1">Active</p>
-          <p className="text-2xl font-bold text-emerald-600">
+          <div className="text-2xl font-bold text-emerald-600">
             {isLoading ? <Skeleton className="h-8 w-14 my-0.5" /> : activeCount}
-          </p>
+          </div>
         </div>
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-blue-500">
           <p className="text-slate-600 text-sm font-medium mb-1">Inactive</p>
-          <p className="text-2xl font-bold text-blue-600">
+          <div className="text-2xl font-bold text-blue-600">
             {isLoading ? <Skeleton className="h-8 w-14 my-0.5" /> : categories.length - activeCount}
-          </p>
+          </div>
         </div>
       </div>
 

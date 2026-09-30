@@ -5,6 +5,7 @@ from django.conf import settings
 from core.upload_validators import (
     validate_image_size_5mb, validate_image_extension,
     validate_document_size_20mb, validate_document_extension,
+    validate_pdf_upload,
 )
 
 class ExamCategory(models.Model):
@@ -376,6 +377,7 @@ class PracticeSession(models.Model):
         # A system-assembled queue from QuestionMastery signals (due for
         # review, repeatedly incorrect, weak topics) rather than a topic pick.
         ('revision', 'Revision'),
+        ('saved', 'Saved Questions'),
         # A curated 20-question set personalised per student for the calendar
         # day — built from weak topics, unseen questions, and exam syllabus.
         ('daily', 'Daily Practice'),
@@ -385,6 +387,7 @@ class PracticeSession(models.Model):
     subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
     topic = models.ForeignKey(Topic, on_delete=models.SET_NULL, null=True, blank=True)
     mode = models.CharField(max_length=20, choices=MODE_CHOICES, default='flexible')
+    shuffle_questions = models.BooleanField(default=False)
     difficulty = models.CharField(max_length=10, blank=True, null=True)
     total_questions = models.IntegerField()
     correct_count = models.IntegerField(default=0)
@@ -472,6 +475,7 @@ class Bookmark(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='bookmarks')
     question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='bookmarks')
     created_at = models.DateTimeField(auto_now_add=True)
+    custom_order = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         unique_together = ('user', 'question')
@@ -627,10 +631,10 @@ class Examination(models.Model):
     # admin-defined ExamCategory taxonomy, e.g. "Loksewa"). Left blank for
     # exam_type='subjective' exams, which sit outside this scheme entirely.
     OBJECTIVE_CATEGORIES = (
-        ('old_past', 'Old Past Exam'),
+        ('past_year', 'Past Year Paper'),
         ('model', 'Model Exam'),
         ('live', 'Live Exam'),
-        ('custom', 'Create Your Own Exam'),
+        ('topicwise', 'Topicwise Exam'),
     )
     objective_category = models.CharField(
         max_length=20, choices=OBJECTIVE_CATEGORIES, null=True, blank=True
@@ -643,8 +647,13 @@ class Examination(models.Model):
     exam = models.ForeignKey(Exam, on_delete=models.CASCADE, related_name='examinations', help_text="Position / Level")
     course = models.ForeignKey('courses.Course', on_delete=models.SET_NULL, null=True, blank=True, related_name='examinations', help_text="Specific course this mock exam belongs to")
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='examinations', null=True, blank=True)
+    topic = models.ForeignKey('exams.Topic', on_delete=models.SET_NULL, null=True, blank=True, related_name='examinations')
     
     question_set = models.ForeignKey(QuestionSet, on_delete=models.SET_NULL, null=True, blank=True, related_name='examinations')
+    subjective_question_set = models.ForeignKey(
+        'exams.SubjectiveQuestionSet', on_delete=models.PROTECT, null=True, blank=True,
+        related_name='examinations',
+    )
     questions = models.ManyToManyField(Question, through='ExaminationQuestion', related_name='examinations_set')
     
     instructions = models.TextField(blank=True)
@@ -686,6 +695,7 @@ class Examination(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_examinations')
+    generation_key = models.UUIDField(null=True, blank=True, unique=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -709,7 +719,9 @@ class Examination(models.Model):
         max_length=20, default='admin',
         choices=(
             ('admin', 'Admin Evaluation'),
+            ('manual', 'Manual Examiner Evaluation'),
             ('ai', 'AI Evaluation'),
+            ('ai_assisted', 'AI-Assisted Evaluation'),
             ('hybrid', 'Hybrid Evaluation'),
         ),
     )
@@ -751,6 +763,128 @@ class Examination(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class SubjectiveQuestionSet(models.Model):
+    STATUS_CHOICES = (
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+        ('archived', 'Archived'),
+    )
+
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    pdf_file = models.FileField(
+        upload_to='subjective_exams/question_sets/%Y/%m/',
+        max_length=500,
+        validators=[validate_document_size_20mb, validate_document_extension, validate_pdf_upload],
+    )
+    exam_category = models.ForeignKey(
+        ExamCategory, on_delete=models.PROTECT, related_name='subjective_question_sets'
+    )
+    level = models.ForeignKey(Exam, on_delete=models.PROTECT, related_name='subjective_question_sets')
+    course = models.ForeignKey(
+        'courses.Course', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='subjective_question_sets',
+    )
+    subject = models.ForeignKey(
+        Subject, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='subjective_question_sets',
+    )
+    duration_minutes = models.PositiveIntegerField(default=180)
+    total_marks = models.FloatField(default=100)
+    question_count = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='inactive')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_subjective_question_sets',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+        indexes = [
+            models.Index(fields=('status', 'exam_category', 'level')),
+            models.Index(fields=('status', 'subject')),
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.level_id and self.exam_category_id and self.level.category_id != self.exam_category_id:
+            raise ValidationError({'level': 'The selected level must belong to the selected exam category.'})
+        if self.subject_id and self.subject.paper.exam_id != self.level_id:
+            raise ValidationError({'subject': 'The selected subject must belong to the selected level.'})
+        if self.course_id and self.course.exam_id and self.course.exam_id != self.level_id:
+            raise ValidationError({'course': 'The selected course must belong to the selected level.'})
+
+    @property
+    def usage_count(self):
+        return self.examinations.count()
+
+    @property
+    def last_used_at(self):
+        return self.examinations.order_by('-created_at').values_list('created_at', flat=True).first()
+
+    def __str__(self):
+        return self.title
+
+
+class ExaminationRequest(models.Model):
+    REQUEST_TYPES = (
+        ('exam_access', 'Examination Access'),
+        ('subjective_live', 'Subjective Live Exam'),
+    )
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    )
+
+    student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='examination_requests')
+    request_type = models.CharField(max_length=24, choices=REQUEST_TYPES, default='exam_access')
+    examination = models.ForeignKey(
+        Examination, on_delete=models.CASCADE, null=True, blank=True, related_name='student_requests'
+    )
+    academic_exam = models.ForeignKey(
+        'exams.Exam', on_delete=models.CASCADE, null=True, blank=True, related_name='subjective_exam_requests'
+    )
+    course = models.ForeignKey(
+        'courses.Course', on_delete=models.SET_NULL, null=True, blank=True, related_name='subjective_exam_requests'
+    )
+    subject = models.ForeignKey(
+        'exams.Subject', on_delete=models.SET_NULL, null=True, blank=True, related_name='subjective_exam_requests'
+    )
+    topic = models.ForeignKey(
+        'exams.Topic', on_delete=models.SET_NULL, null=True, blank=True, related_name='subjective_exam_requests'
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    rejection_reason = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_examination_requests'
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=('student', 'examination'),
+                condition=models.Q(examination__isnull=False),
+                name='unique_student_examination_request',
+            ),
+            models.UniqueConstraint(
+                fields=('student', 'academic_exam'),
+                condition=models.Q(request_type='subjective_live', status='pending'),
+                name='unique_pending_subjective_request',
+            ),
+        ]
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f'{self.student} - {self.examination.title} ({self.status})'
+
 
 class ExaminationQuestion(models.Model):
     examination = models.ForeignKey(Examination, on_delete=models.CASCADE, related_name='examination_questions')
@@ -914,6 +1048,16 @@ class ExamSchedule(models.Model):
         help_text="Specific Position / Level (optional)"
     )
     description = models.TextField(blank=True)
+    EXAM_TYPE_CHOICES = (
+        ('all', 'All Types'),
+        ('topicwise', 'Topicwise Test'),
+        ('objective', 'Objective Exam'),
+        ('subjective', 'Subjective Exam'),
+    )
+    exam_type = models.CharField(
+        max_length=20, choices=EXAM_TYPE_CHOICES, default='objective', blank=True,
+        help_text="Primary classification: topicwise, objective, subjective, or all"
+    )
     exam_date = models.DateField(help_text="Official Exam Date (YYYY-MM-DD)")
     exam_time = models.TimeField(null=True, blank=True, help_text="Exam start time (e.g. 08:00:00 or 11:00:00)")
     exam_datetime = models.DateTimeField(null=True, blank=True, help_text="Timezone-aware UTC datetime calculated from exam_date and exam_time")

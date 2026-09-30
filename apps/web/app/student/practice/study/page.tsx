@@ -8,12 +8,15 @@ import { Button } from "@/components/ui/button";
 import { practiceApi, StudyPage } from "@/lib/api/practice";
 import { TopicPracticeBrowser, QuestionSkeleton, readStoredPageSize } from "@/components/practice/TopicPracticeBrowser";
 import { usePracticeExams, useSavedQuestions, practiceResultKey } from "@/lib/practice-hooks";
+import { useOptionalStudentContext } from "@/contexts/StudentContext";
 import { ExamListStatus } from "@/components/practice/ExamListStatus";
 import { practiceError, PracticeError } from "@/lib/practice-errors";
 
 export default function TopicStudyPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const studentCtx = useOptionalStudentContext();
+  const courseId = studentCtx?.activeCourse?.id ?? null;
   // Syllabus + saved questions come from the shared query cache, so coming
   // back to Practice shows them instantly instead of refetching.
   const examsQuery = usePracticeExams();
@@ -23,20 +26,30 @@ export default function TopicStudyPage() {
   const [exam, setExam] = useState("");
   const [subject, setSubject] = useState("");
   const [topic, setTopic] = useState("");
+  const [shuffleQuestions, setShuffleQuestions] = useState(false);
 
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<PracticeError | null>(null);
   const [session, setSession] = useState<StudyPage | null>(null);
 
   useEffect(() => {
-    if (!exam && exams.length > 0 && exams[0]?.id) setExam(exams[0].id.toString());
+    if (!exam && exams.length > 0) {
+      // Prioritize exams that have active subjects available for study
+      const examWithSubjects = exams.find(e => (e.subjects?.length ?? 0) > 0) ?? exams[0];
+      if (examWithSubjects?.id) {
+        setExam(examWithSubjects.id.toString());
+      }
+    }
   }, [exams, exam]);
 
   const activeExam = useMemo(() => exams.find(e => e.id.toString() === exam), [exam, exams]);
   const activeSubject = useMemo(() => activeExam?.subjects?.find(s => s.id.toString() === subject), [activeExam, subject]);
-  const allTopics = useMemo(() => activeSubject?.units?.flatMap(u => u.topics) || [], [activeSubject]);
+  const allTopics = useMemo(
+    () => (activeSubject?.units ?? activeSubject?.chapters ?? []).flatMap(u => u.topics || []) || [],
+    [activeSubject]
+  );
   const activeUnit = useMemo(
-    () => activeSubject?.units?.find(u => u.topics.some(t => t.id.toString() === topic)),
+    () => (activeSubject?.units ?? activeSubject?.chapters ?? [])?.find(u => (u.topics || []).some(t => t.id.toString() === topic)),
     [activeSubject, topic]
   );
 
@@ -46,11 +59,13 @@ export default function TopicStudyPage() {
     setError(null);
     try {
       const data = await practiceApi.startStudy({
-        topic, subject, exam, restart,
+        topic, subject, exam, course: courseId, restart,
+        shuffle_questions: shuffleQuestions,
         page_size: readStoredPageSize(),
       });
       // A restart replaces the question set: drop pages cached for the old one.
       queryClient.removeQueries({ queryKey: ["practice-study-page"] });
+      setShuffleQuestions(Boolean(data.session.shuffle_questions));
       setSession(data);
     } catch (e) {
       console.error(e);
@@ -96,10 +111,13 @@ export default function TopicStudyPage() {
               {topicName || "Topic"}
             </h1>
             <p className="text-muted-foreground text-[14px]">
-              Browse freely — no timer, no fixed count. Answer if you're confident, or View Answer to just learn it.
+              Browse freely — no timer, no fixed count. Answer if you&apos;re confident, or View Answer to just learn it.
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-muted-foreground">
+              Shuffle {session.session.shuffle_questions ? "On" : "Off"}
+            </span>
             {session.resumed && (
               <span className="text-xs font-bold uppercase tracking-wider text-[#D4A72C] bg-[#D4A72C]/10 px-3 py-1.5 rounded-full">
                 Resumed
@@ -171,10 +189,20 @@ export default function TopicStudyPage() {
             value={subject}
             onChange={(e) => { setSubject(e.target.value); setTopic(""); }}
             className="w-full h-12 px-3 bg-muted border border-border rounded-[10px] text-[15px] font-medium text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary dark:focus:border-[#D4A72C] dark:focus:ring-[#D4A72C]"
-            disabled={!activeExam}
+            disabled={!activeExam || (activeExam?.subjects?.length ?? 0) === 0}
           >
-            <option value="">Select a subject</option>
-            {activeExam?.subjects?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            <option value="">
+              {!activeExam
+                ? "Select an exam first"
+                : (activeExam?.subjects?.length ?? 0) === 0
+                ? "No subjects available for this exam"
+                : "Select a subject"}
+            </option>
+            {activeExam?.subjects?.map(s => (
+              <option key={s.id} value={s.id.toString()}>
+                {s.name || s.title}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -184,10 +212,20 @@ export default function TopicStudyPage() {
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             className="w-full h-12 px-3 bg-muted border border-border rounded-[10px] text-[15px] font-medium text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary dark:focus:border-[#D4A72C] dark:focus:ring-[#D4A72C]"
-            disabled={!activeSubject}
+            disabled={!activeSubject || allTopics.length === 0}
           >
-            <option value="">Select a topic</option>
-            {allTopics.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            <option value="">
+              {!activeSubject
+                ? "Select a subject first"
+                : allTopics.length === 0
+                ? "No topics available for this subject"
+                : "Select a topic"}
+            </option>
+            {allTopics.map(t => (
+              <option key={t.id} value={t.id.toString()}>
+                {t.name || t.title}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -196,6 +234,20 @@ export default function TopicStudyPage() {
           isEmpty={!loadingExams && !examsQuery.isError && exams.length === 0}
           onRetry={() => examsQuery.refetch()}
         />
+
+        <label className="flex items-center justify-between gap-4 border border-border rounded-[10px] px-4 py-3 text-sm font-medium text-primary dark:text-foreground">
+          <span>Shuffle Questions</span>
+          <span className="flex items-center gap-3 text-muted-foreground">
+            {shuffleQuestions ? "On" : "Off"}
+            <input
+              type="checkbox"
+              checked={shuffleQuestions}
+              onChange={(event) => setShuffleQuestions(event.target.checked)}
+              className="h-4 w-4 accent-primary"
+              aria-label="Shuffle Questions"
+            />
+          </span>
+        </label>
 
         {error && (
           <div className="flex items-center gap-2 text-sm text-red-600 font-medium" role="alert">

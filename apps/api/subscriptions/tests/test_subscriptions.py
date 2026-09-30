@@ -17,11 +17,16 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from administration.models import AuditLog
 from core.models import AdminSettings, Notification, User
 from courses.models import Course, Enrollment
+from exams.models import Exam, ExamCategory
 from marketplace.models import PaymentMethod
 from subscriptions.access import has_active_subscription, has_feature
-from subscriptions.models import Invoice, Subscription, SubscriptionPayment, SubscriptionPlan
+from subscriptions.models import (
+    Invoice, Subscription, SubscriptionCourseSelection,
+    SubscriptionPayment, SubscriptionPlan,
+)
 
 # A 1x1 GIF - the same dummy upload fixture the marketplace test suite uses,
 # small enough to pass validate_image_size_5mb and validate_image_extension.
@@ -61,6 +66,128 @@ class PackageManagementTests(APITestCase):
             'name': 'Hack', 'description': '', 'duration': 1, 'price': '0.00',
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_can_permanently_delete_package_without_history(self):
+        plan = SubscriptionPlan.objects.create(
+            name='Unused Plan', description='', duration=30, price='500'
+        )
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.delete(f'/api/subscriptions/plans/{plan.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['deleted'])
+        self.assertFalse(SubscriptionPlan.objects.filter(pk=plan.pk).exists())
+
+    def test_delete_archives_package_with_historical_records(self):
+        plan = SubscriptionPlan.objects.create(
+            name='Purchased Plan', description='', duration=30, price='500'
+        )
+        course = Course.objects.create(
+            title='Preparation', slug='package-delete-preparation', status='published'
+        )
+        plan.course = course
+        plan.eligible_courses.add(course)
+        plan.save()
+        now = timezone.now()
+        subscription = Subscription.objects.create(
+            student=self.student, plan=plan, start_date=now,
+            expiry_date=now + timedelta(days=30),
+        )
+        method = PaymentMethod.objects.create(
+            method_type='ESEWA', display_name='eSewa', account_name='LoksewaAI',
+            account_number='9800000000',
+        )
+        payment = SubscriptionPayment.objects.create(
+            student=self.student, plan=plan, subscription=subscription,
+            payment_method=method, amount='500', transaction_id='DELETE-HISTORY-1',
+            screenshot='subscriptions/payment_proofs/proof.gif',
+        )
+        invoice = Invoice.objects.create(
+            student=self.student, payment=payment,
+            receipt_number='DELETE-HISTORY-INV-1', amount='500',
+        )
+        selection = SubscriptionCourseSelection.objects.create(
+            subscription=subscription, course=course,
+        )
+        enrollment = Enrollment.objects.create(student=self.student, course=course)
+        AuditLog.objects.create(
+            actor=self.admin, action='PACKAGE_CREATED',
+            entity_type='SubscriptionPlan', entity_id=str(plan.pk),
+        )
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.delete(f'/api/subscriptions/plans/{plan.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['archived'])
+        self.assertEqual(response.data['dependencies']['subscriptions'], 1)
+        self.assertEqual(response.data['dependencies']['payments'], 1)
+        self.assertEqual(response.data['dependencies']['enrollments'], 1)
+        plan.refresh_from_db()
+        self.assertEqual(plan.status, 'ARCHIVED')
+        self.assertTrue(Subscription.objects.filter(pk=subscription.pk).exists())
+        self.assertTrue(SubscriptionPayment.objects.filter(pk=payment.pk).exists())
+        self.assertTrue(Invoice.objects.filter(pk=invoice.pk).exists())
+        self.assertTrue(SubscriptionCourseSelection.objects.filter(pk=selection.pk).exists())
+        self.assertTrue(Enrollment.objects.filter(pk=enrollment.pk).exists())
+        self.assertNotIn(
+            plan.name,
+            [item['name'] for item in self.client.get('/api/packages/public/').data],
+        )
+
+    def test_teacher_cannot_delete_package(self):
+        teacher = User.objects.create_user(username='teacher-delete', password='pw', role='teacher')
+        plan = SubscriptionPlan.objects.create(
+            name='Protected Plan', description='', duration=30, price='500'
+        )
+        self.client.force_authenticate(teacher)
+
+        response = self.client.delete(f'/api/subscriptions/plans/{plan.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(SubscriptionPlan.objects.filter(pk=plan.pk).exists())
+
+    def test_package_cannot_include_coming_soon_course(self):
+        category = ExamCategory.objects.create(name='PSC Exams')
+        exam = Exam.objects.create(
+            category=category, name='Coming Soon Preparation', status='coming_soon'
+        )
+        course = Course.objects.create(
+            title='Coming Soon Course', slug='coming-soon-package-course',
+            status='published', exam=exam,
+        )
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.post('/api/subscriptions/plans/', {
+            'name': 'Coming Soon Package', 'description': '', 'duration': 30,
+            'price': '500', 'package_type': 'SINGLE', 'course': course.id,
+            'eligible_courses': [course.id],
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(SubscriptionPlan.objects.filter(name='Coming Soon Package').exists())
+
+    def test_admin_can_create_package_for_active_canonical_course(self):
+        category = ExamCategory.objects.create(name='PSC Exams')
+        level = Exam.objects.create(category=category, name='4th Level')
+        preparation = Exam.objects.create(
+            category=category, parent=level, name='Assistant Civil Engineer'
+        )
+        course = Course.objects.create(
+            title='Assistant Civil Engineer', slug='active-package-course',
+            status='published', exam=preparation,
+        )
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.post('/api/subscriptions/plans/', {
+            'name': 'Assistant Civil Engineer Access', 'description': '',
+            'duration': 90, 'price': '2999', 'package_type': 'SINGLE',
+            'course': course.id, 'eligible_courses': [course.id],
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data['course'], course.id)
 
     def test_student_sees_only_active_plans(self):
         active = SubscriptionPlan.objects.create(name='Active Plan', description='', duration=30, price='500', status='ACTIVE')
@@ -110,6 +237,22 @@ class PurchaseFlowTests(APITestCase):
         self.method = PaymentMethod.objects.create(
             method_type='ESEWA', display_name='eSewa', account_name='LoksewaAI', account_number='9800000000',
         )
+
+    def test_archived_package_cannot_be_purchased(self):
+        self.plan.status = 'ARCHIVED'
+        self.plan.save(update_fields=['status', 'updated_at'])
+        self.client.force_authenticate(self.student)
+
+        response = self.client.post('/api/subscriptions/payments/', {
+            'plan': self.plan.id, 'payment_method': self.method.id,
+            'transaction_id': 'ARCHIVED-PLAN-PURCHASE',
+            'screenshot': _dummy_screenshot(),
+        }, format='multipart')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(SubscriptionPayment.objects.filter(
+            transaction_id='ARCHIVED-PLAN-PURCHASE'
+        ).exists())
 
     @patch('core.google_drive.upload_file')
     def test_purchase_uses_server_side_price_not_client_amount(self, mock_upload):

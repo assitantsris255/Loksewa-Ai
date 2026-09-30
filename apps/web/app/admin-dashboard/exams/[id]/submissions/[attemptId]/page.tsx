@@ -47,6 +47,7 @@ export default function SubmissionEvaluationPage() {
   const [editPublishedConfirmed, setEditPublishedConfirmed] = useState<boolean>(false);
 
   // Fetch submission details by attempt ID
+  // Fetch submission details by attempt ID or submission ID
   const {
     data: submission,
     isLoading,
@@ -54,7 +55,13 @@ export default function SubmissionEvaluationPage() {
     refetch,
   } = useQuery({
     queryKey: ["admin", "subjective-submission", attemptId],
-    queryFn: () => adminExamApi.getSubjectiveSubmissionByAttempt(attemptId),
+    queryFn: async () => {
+      try {
+        return await adminExamApi.getSubjectiveSubmissionByAttempt(attemptId);
+      } catch (err: any) {
+        return await adminExamApi.getSubjectiveSubmission(attemptId);
+      }
+    },
     enabled: Number.isFinite(attemptId) && attemptId > 0,
   });
 
@@ -474,15 +481,25 @@ export default function SubmissionEvaluationPage() {
                 <ZoomIn className="w-3.5 h-3.5" />
               </button>
               {pdfUrl && (
-                <a
-                  href={pdfUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="p-1.5 hover:bg-slate-200 rounded text-slate-600 transition-colors ml-1"
-                  title="Open in new window"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
+                <>
+                  <a
+                    href={pdfUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1.5 hover:bg-slate-200 rounded text-slate-600 transition-colors ml-1"
+                    title="Open PDF in new window"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                  <a
+                    href={pdfUrl}
+                    download={`answer-sheet-${submission.student_name}.pdf`}
+                    className="p-1.5 hover:bg-slate-200 rounded text-slate-600 transition-colors"
+                    title="Download Answer Sheet PDF"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                  </a>
+                </>
               )}
             </div>
           </div>

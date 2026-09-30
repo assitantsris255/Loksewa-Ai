@@ -207,7 +207,7 @@ class QuestionSelectionService:
         }
         return {"total": total, "by_difficulty": by_diff}
 
-    def select_ids(self, *, limit: int, **filters) -> list:
+    def select_ids(self, *, limit: Optional[int] = None, **filters) -> list:
         """IDs of the approved questions matching `filters`, oldest first.
 
         Same pool as select() - it is built from the same base queryset and
@@ -218,7 +218,8 @@ class QuestionSelectionService:
         full question row just to read the ids back out.
         """
         qs = self.apply_filters(self.get_base_queryset(), **filters)
-        return list(qs.order_by("id").values_list("id", flat=True)[:limit])
+        ids = qs.order_by("id").values_list("id", flat=True)
+        return list(ids[:limit] if limit is not None else ids)
 
     def select(
         self,

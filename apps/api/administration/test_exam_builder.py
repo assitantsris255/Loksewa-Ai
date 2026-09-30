@@ -364,6 +364,57 @@ class PublishTests(ExamBuilderTestBase):
         self.assertNotIn('correct_option', res.data['questions'][0])
 
 
+class TopicwiseTestManagementTests(ExamBuilderTestBase):
+    def setUp(self):
+        super().setUp()
+        from courses.models import Course
+        self.course = Course.objects.create(
+            title='Section Officer', slug='section-officer-topic-test',
+            status='published', exam=self.exam,
+        )
+
+    def test_topicwise_examination_persists_course_and_topic(self):
+        self.as_admin()
+        response = self.client.patch(self.url, {
+            'exam_type': 'subject', 'course': self.course.id, 'topic': self.topic.id,
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['topic'], self.topic.id)
+        self.assertEqual(response.data['topic_name'], self.topic.name)
+        self.examination.refresh_from_db()
+        self.assertEqual(self.examination.course_id, self.course.id)
+        self.assertEqual(self.examination.topic_id, self.topic.id)
+
+    def test_topicwise_assignment_rejects_questions_from_another_topic(self):
+        self.as_admin()
+        self.client.patch(self.url, {
+            'exam_type': 'subject', 'course': self.course.id, 'topic': self.topic.id,
+        }, format='json')
+
+        response = self.client.post(f'{self.url}add-questions/', {
+            'question_ids': [self.approved[0].id, self.off_scope.id],
+        }, format='json')
+
+        self.assertEqual(response.data['added_count'], 1)
+        self.assertIn(self.off_scope.id, response.data['not_approved_or_missing'])
+        self.assertEqual(list(self.examination.examination_questions.values_list('question_id', flat=True)), [self.approved[0].id])
+
+    def test_topicwise_test_with_approved_topic_questions_can_publish(self):
+        self.as_admin()
+        self.client.patch(self.url, {
+            'exam_type': 'subject', 'course': self.course.id, 'topic': self.topic.id,
+        }, format='json')
+        self.client.post(f'{self.url}add-questions/', {
+            'question_ids': [self.approved[0].id],
+        }, format='json')
+
+        response = self.client.post(f'{self.url}publish/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data['status'], 'published')
+
+
 class AnalyticsResultsTests(ExamBuilderTestBase):
     def test_analytics_endpoint_still_works(self):
         self.as_admin()

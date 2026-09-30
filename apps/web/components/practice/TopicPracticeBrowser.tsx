@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { practiceApi, StudyPage, StudyStats, Question, AttemptState } from "@/lib/api/practice";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Star, CheckCircle2, XCircle, AlertCircle, Flag, RotateCcw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Star, CheckCircle2, XCircle, AlertCircle, Flag, Lightbulb, RotateCcw } from "lucide-react";
 import { practiceError, practiceErrorMessage, ANSWER_FAILED_MESSAGE, NO_QUESTIONS_MESSAGE } from "@/lib/practice-errors";
 import { REVISION_SUMMARY_KEY } from "@/lib/practice-hooks";
 
@@ -81,6 +81,7 @@ export function TopicPracticeBrowser({ initial, savedQuestionIds, onToggleSave, 
   const [pageSize, setPageSize] = useState<number>(initial.page_size);
   const [page, setPage] = useState<number>(initial.page);
   const [state, setState] = useState<Record<number, QuestionState>>(() => toStateMap(initial.attempts));
+  const [visibleHints, setVisibleHints] = useState<Record<number, boolean>>({});
   const [stats, setStats] = useState<StudyStats>(initial.stats);
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
@@ -314,13 +315,14 @@ export function TopicPracticeBrowser({ initial, savedQuestionIds, onToggleSave, 
           const qState = state[q.id];
           const isSaved = !!savedQuestionIds[q.id];
           const globalNumber = firstIndex + idx + 1;
+          const canonicalNumber = q.canonical_number ?? globalNumber;
           const isEvaluated = !!qState?.is_viewed;
 
           return (
             <div key={q.id} className="bg-card rounded-[16px] border border-border shadow-sm p-6 md:p-8">
               <div className="flex justify-between items-center mb-6">
                 <span className="text-sm font-bold text-muted-foreground tracking-widest uppercase">
-                  Question {globalNumber}
+                  Question {canonicalNumber}
                 </span>
                 <Button
                   variant="ghost"
@@ -334,6 +336,19 @@ export function TopicPracticeBrowser({ initial, savedQuestionIds, onToggleSave, 
               </div>
 
               <h2 className="text-xl font-medium text-primary dark:text-foreground leading-relaxed mb-8">{q.text}</h2>
+
+              {q.hint && (
+                <div className="mb-5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setVisibleHints((prev) => ({ ...prev, [q.id]: !prev[q.id] }))}
+                  >
+                    <Lightbulb className="mr-2 h-4 w-4" />{visibleHints[q.id] ? "Hide Hint" : "Show Hint"}
+                  </Button>
+                  {visibleHints[q.id] && <p className="mt-2 border-l-2 border-amber-500 px-3 py-2 text-sm text-muted-foreground">{q.hint}</p>}
+                </div>
+              )}
 
               {isEvaluated && qState?.selected_option && (
                 <div
@@ -357,7 +372,7 @@ export function TopicPracticeBrowser({ initial, savedQuestionIds, onToggleSave, 
               )}
 
               <fieldset className="space-y-4" disabled={qState?.saving} role="radiogroup">
-                <legend className="sr-only">Answer options for question {globalNumber}</legend>
+                <legend className="sr-only">Answer options for question {canonicalNumber}</legend>
                 {(["a", "b", "c", "d"] as const).map((opt) => {
                   const optionText = q[`option_${opt}`];
                   if (!optionText) return null;

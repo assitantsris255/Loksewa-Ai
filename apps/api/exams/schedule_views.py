@@ -24,7 +24,16 @@ class AdminExamScheduleViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminUser]
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ['title', 'description', 'exam_category__name', 'exam__name']
-    filterset_fields = ['is_published', 'is_active', 'exam_category', 'exam']
+    filterset_fields = ['is_published', 'is_active', 'exam_category', 'exam', 'exam_type']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        exam_type = self.request.query_params.get('exam_type')
+        if exam_type:
+            exam_type = exam_type.strip().lower()
+            if exam_type != 'all':
+                qs = qs.filter(Q(exam_type=exam_type) | Q(exam_type='all'))
+        return qs
 
     def perform_create(self, serializer):
         schedule = serializer.save()

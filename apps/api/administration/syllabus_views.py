@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from administration.permissions import IsAdminUser
-from django.db.models import Q
+from django.db.models import Q, ProtectedError
 from exams.models import ExamCategory, Exam, Paper, Subject, Chapter, Topic, Question, Examination
 from notes.models import StudyMaterial
 from .syllabus_serializers import (
@@ -128,22 +128,19 @@ class BaseSyllabusViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        force = (
-            request.query_params.get('force') == 'true' or
-            (request.data.get('force') is True if isinstance(request.data, dict) else False)
-        )
         deps = get_node_dependencies(instance)
-        if deps['has_dependencies'] and not force:
-            return Response(
-                {
-                    'error': 'Cannot delete node because it has linked content.',
-                    'message': deps['message'],
-                    'dependencies': deps['counts'],
-                    'can_archive': True,
-                },
-                status=status.HTTP_409_CONFLICT
-            )
-        return super().destroy(request, *args, **kwargs)
+        return Response(
+            {
+                'error': 'Deletion of master academic records is disabled.',
+                'message': (
+                    'This academic node is shared by platform modules. Archive it instead; '
+                    'force deletion is disabled to protect existing content and relationships.'
+                ),
+                'dependencies': deps['counts'],
+                'can_archive': True,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
 
 class ExamCategoryViewSet(BaseSyllabusViewSet):
     queryset = ExamCategory.objects.all().order_by('order', 'id')

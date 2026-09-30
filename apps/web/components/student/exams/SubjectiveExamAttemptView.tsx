@@ -3,12 +3,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Clock, Camera, UploadCloud, FileCheck, Trash2, ArrowLeft, ArrowRight,
+  Clock, Camera, UploadCloud, Trash2, ArrowLeft, ArrowRight,
   RotateCw, Eye, AlertTriangle, CheckCircle2, Loader2, Maximize2,
-  Minimize2, ZoomIn, ZoomOut, FileText, Send, HelpCircle, ShieldAlert,
+  Minimize2, ZoomIn, ZoomOut, FileText, Send,
   ExternalLink, RefreshCw
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { studentExamsApi, SubjectiveAttemptState } from "@/lib/api/student-exams";
 import toast from "react-hot-toast";
 
@@ -500,28 +501,42 @@ export function SubjectiveExamAttemptView({
                   Your handwritten answer sheet has been compiled and safely recorded. Our evaluators will review and
                   grade your submission.
                 </p>
-                {canUpload && (
-                  <button
-                    onClick={() => {
-                      if (confirm("Replace existing submitted answer sheet with new photos?")) {
-                        setUploadSuccess(false);
-                      }
-                    }}
-                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 rounded-lg transition-colors inline-block"
-                  >
-                    Replace / Re-upload
-                  </button>
-                )}
-                {isCompleted && (
-                  <div className="pt-2">
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                  {uploadedPdfFile && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const url = URL.createObjectURL(uploadedPdfFile);
+                        window.open(url, "_blank");
+                      }}
+                      className="px-3.5 py-1.5 bg-indigo-950 border border-indigo-700 hover:bg-indigo-900 text-xs font-semibold text-indigo-200 rounded-lg transition-colors inline-flex items-center gap-1.5"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-indigo-400" /> Preview Submitted PDF
+                    </button>
+                  )}
+                  {canUpload && (
+                    <button
+                      onClick={() => {
+                        if (confirm("Replace existing submitted answer sheet with a new PDF or photos?")) {
+                          setUploadSuccess(false);
+                          setUploadedPdfFile(null);
+                          setCapturedPages([]);
+                        }
+                      }}
+                      className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 rounded-lg transition-colors inline-block"
+                    >
+                      Replace / Re-upload
+                    </button>
+                  )}
+                  {isCompleted && (
                     <Button
                       onClick={() => router.replace(`/student/exams/${examId}/result/${attemptId}`)}
                       className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs"
                     >
                       View Result Portal
                     </Button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             ) : (
               <>
@@ -554,7 +569,7 @@ export function SubjectiveExamAttemptView({
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/*,application/pdf"
+                    accept="application/pdf,image/*"
                     multiple
                     className="hidden"
                     onChange={handleFilesSelected}
@@ -566,31 +581,78 @@ export function SubjectiveExamAttemptView({
                     className="p-4 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-300 flex flex-col items-center justify-center gap-2 transition-all group disabled:opacity-40"
                   >
                     <div className="w-10 h-10 rounded-full bg-slate-700 text-slate-200 flex items-center justify-center group-hover:scale-105 transition-transform shadow-md">
-                      <UploadCloud className="w-5 h-5" />
+                      <UploadCloud className="w-5 h-5 text-indigo-400" />
                     </div>
-                    <span className="font-bold text-sm text-white">Upload Images or PDF</span>
-                    <span className="text-[11px] text-slate-400">Choose from gallery or documents</span>
+                    <span className="font-bold text-sm text-white">Upload PDF or Images</span>
+                    <span className="text-[11px] text-slate-400">Directly submit scanned PDF or image sheets</span>
                   </button>
                 </div>
 
                 {/* Direct PDF Upload Selected */}
                 {uploadedPdfFile && (
-                  <div className="bg-slate-800/80 border border-indigo-500/40 rounded-xl p-4 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <FileCheck className="w-6 h-6 text-emerald-400 shrink-0" />
-                      <div>
-                        <div className="font-semibold text-sm text-white">{uploadedPdfFile.name}</div>
-                        <div className="text-xs text-slate-400">
-                          {(uploadedPdfFile.size / (1024 * 1024)).toFixed(2)} MB PDF Document
+                  <div className="bg-slate-800/90 border border-indigo-500/40 rounded-xl p-4 space-y-3 shadow-md">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-red-500/20 text-red-400 border border-red-500/30 flex items-center justify-center shrink-0">
+                          <FileText className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="font-bold text-sm text-white flex items-center gap-2">
+                            <span>{uploadedPdfFile.name}</span>
+                            <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/30 text-[10px] font-bold">
+                              PDF
+                            </Badge>
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {(uploadedPdfFile.size / (1024 * 1024)).toFixed(2)} MB · Document Ready to Submit
+                          </div>
                         </div>
                       </div>
+                      <button
+                        onClick={() => setUploadedPdfFile(null)}
+                        className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-slate-700 transition-colors"
+                        title="Remove PDF"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
-                    <button
-                      onClick={() => setUploadedPdfFile(null)}
-                      className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-slate-700 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+
+                    {/* Preview / Replace / Submit Actions */}
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-700/60">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const url = URL.createObjectURL(uploadedPdfFile);
+                          window.open(url, "_blank");
+                        }}
+                        className="border-slate-600 text-slate-200 hover:bg-slate-700 text-xs font-semibold gap-1.5 bg-slate-800"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-indigo-400" /> Preview PDF
+                      </Button>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="border-slate-600 text-slate-200 hover:bg-slate-700 text-xs font-semibold gap-1.5 bg-slate-800"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 text-slate-400" /> Replace File
+                      </Button>
+
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!canUpload || submittingAnswer}
+                        onClick={handleSubmitAnswerSheet}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold gap-1.5 ml-auto shadow-md"
+                      >
+                        {submittingAnswer ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                        Submit Answer Sheet
+                      </Button>
+                    </div>
                   </div>
                 )}
 

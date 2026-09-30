@@ -65,8 +65,6 @@ export default function ImportExamPage() {
   // --- Objective Exam State ---
   const [objectiveTitle, setObjectiveTitle] = useState("");
   const [objectiveCategory, setObjectiveCategory] = useState<ImportCategory>("model");
-  const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
-  const [questionType, setQuestionType] = useState<"mcq" | "true_false">("mcq");
   const [objectiveDuration, setObjectiveDuration] = useState<number>(60);
   const [objectiveFile, setObjectiveFile] = useState<File | null>(null);
   const [report, setReport] = useState<ImportReport | null>(null);
@@ -141,8 +139,6 @@ export default function ImportExamPage() {
     try {
       const res = await adminQuestionApi.uploadCSV(objectiveFile, {
         topic: topic || '',
-        question_type: questionType,
-        difficulty,
       });
       setReport(res);
       setStep(2);
@@ -454,37 +450,6 @@ export default function ImportExamPage() {
                       Server-authoritative timer. Students cannot reset timer on refresh or navigation.
                     </p>
                   </div>
-
-                  <div>
-                    <label htmlFor="obj-qtype" className="block text-sm font-medium text-gray-700 mb-1">
-                      Question Format
-                    </label>
-                    <select
-                      id="obj-qtype"
-                      value={questionType}
-                      onChange={(e) => setQuestionType(e.target.value as "mcq" | "true_false")}
-                      className={inputCls}
-                    >
-                      <option value="mcq">Multiple Choice (4 Options)</option>
-                      <option value="true_false">True / False</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label htmlFor="obj-diff" className="block text-sm font-medium text-gray-700 mb-1">
-                      Default Difficulty
-                    </label>
-                    <select
-                      id="obj-diff"
-                      value={difficulty}
-                      onChange={(e) => setDifficulty(e.target.value as any)}
-                      className={inputCls}
-                    >
-                      <option value="easy">Easy</option>
-                      <option value="medium">Medium</option>
-                      <option value="hard">Hard</option>
-                    </select>
-                  </div>
                 </div>
 
                 <div className="pt-6 border-t border-gray-100">
@@ -514,18 +479,18 @@ export default function ImportExamPage() {
                   </div>
                   <h2 className="text-xl font-bold text-gray-900 mb-2">Upload Objective Questions Spreadsheet</h2>
                   <p className="text-gray-500 text-center mb-6 text-sm">
-                    Upload an Excel (.xlsx) or CSV file with questions. Questions will be validated, deduplicated, and added to the Master Question Bank.
+                    Upload an Excel (.xlsx) or CSV file with questions. Questions will be validated, deduplicated, and added to the Master Question Bank. Question format and difficulty are automatically parsed from each row in the imported file.
                   </p>
                   <button
                     type="button"
                     onClick={() =>
                       adminQuestionApi
-                        .downloadTemplate(questionType)
+                        .downloadTemplate()
                         .catch((e: any) => toast.error(e?.message || "Failed to download template"))
                     }
                     className="text-[#0B2545] font-medium hover:underline flex items-center gap-2 mb-6"
                   >
-                    <FileText className="w-4 h-4" /> Download Excel Template ({questionType === "mcq" ? "MCQ" : "True/False"})
+                    <FileText className="w-4 h-4" /> Download Question Import Template (.xlsx)
                   </button>
 
                   <div className="w-full border-2 border-dashed border-gray-300 rounded-xl p-8 hover:bg-gray-50 transition-colors text-center relative">

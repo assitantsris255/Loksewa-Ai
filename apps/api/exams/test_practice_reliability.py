@@ -10,7 +10,7 @@ from rest_framework.test import APITestCase
 from core.models import User
 from exams.models import (
     ExamCategory, Exam, Paper, Subject, Chapter, Topic, Question,
-    PracticeSession, QuestionAttempt, QuestionMastery,
+    PracticeSession, QuestionAttempt, QuestionMastery, Bookmark,
 )
 
 STUDY = '/api/practice-sessions/study/'
@@ -38,7 +38,7 @@ class PracticeBase(APITestCase):
             out.append(Question.objects.create(
                 topic=self.topic, question_type='mcq', status=kw.get('status', 'approved'),
                 text=f'Question {i + 1}', option_a='a', option_b='b', option_c='c', option_d='d',
-                correct_option='B', explanation=f'Because {i + 1}', marks=1,
+                correct_option='B', explanation=f'Because {i + 1}', hint=kw.get('hint', ''), marks=1,
             ))
         return out
 
@@ -134,6 +134,15 @@ class TopicPaginationTests(PracticeBase):
         for a in data['attempts']:
             self.assertNotIn('correct_option', a)
 
+    def test_study_can_reveal_a_hint_without_answer_or_explanation(self):
+        self.make_questions(1, hint='Recall the river source.')
+
+        question = self.start().json()['questions'][0]
+
+        self.assertEqual(question['hint'], 'Recall the river source.')
+        self.assertNotIn('correct_option', question)
+        self.assertNotIn('explanation', question)
+
     def test_only_approved_objective_questions_are_offered(self):
         self.make_questions(2)
         self.make_questions(2, status='draft')
@@ -157,6 +166,72 @@ class TopicPaginationTests(PracticeBase):
         with CaptureQueriesContext(connection) as ctx:
             self.assertEqual(self.start().status_code, 200)
         self.assertLess(len(ctx), 25, [q['sql'][:80] for q in ctx.captured_queries])
+
+
+class TopicStudyShuffleTests(PracticeBase):
+    def test_shuffle_is_persisted_per_session_and_keeps_options_and_canonical_numbers(self):
+        questions = self.make_questions(4)
+        with mock.patch('random.shuffle', side_effect=lambda items: items.reverse()):
+            first = self.start(shuffle_questions=True).json()
+
+        self.assertTrue(first['session']['shuffle_questions'])
+        self.assertEqual([q['id'] for q in first['questions']], [q.id for q in reversed(questions)])
+        self.assertEqual([q['canonical_number'] for q in first['questions']], [4, 3, 2, 1])
+        self.assertEqual(
+            [(q['option_a'], q['option_b'], q['option_c'], q['option_d']) for q in first['questions']],
+            [('a', 'b', 'c', 'd')] * 4,
+        )
+
+        resumed = self.start(shuffle_questions=False).json()
+        self.assertEqual(resumed['session']['id'], first['session']['id'])
+        self.assertTrue(resumed['session']['shuffle_questions'])
+        self.assertEqual([q['id'] for q in resumed['questions']], [q.id for q in reversed(questions)])
+
+    def test_topic_study_is_not_capped_at_five_hundred_questions(self):
+        Question.objects.bulk_create([
+            Question(
+                topic=self.topic, question_type='mcq', status='approved',
+                text=f'Question {index}', option_a='a', option_b='b',
+                option_c='c', option_d='d', correct_option='B',
+            )
+            for index in range(501)
+        ])
+
+        response = self.start().json()
+
+        self.assertEqual(response['total_questions'], 501)
+        self.assertEqual(QuestionAttempt.objects.filter(session_id=response['session']['id']).count(), 501)
+
+
+class SavedQuestionOrderingTests(PracticeBase):
+    def test_saved_questions_default_to_chronological_custom_order_and_reset(self):
+        questions = self.make_questions(3)
+        bookmarks = [Bookmark.objects.create(user=self.student, question=question) for question in questions]
+        from django.utils import timezone
+        from datetime import timedelta
+
+        now = timezone.now()
+        for offset, bookmark in enumerate(bookmarks):
+            Bookmark.objects.filter(pk=bookmark.pk).update(created_at=now + timedelta(minutes=offset))
+
+        url = f'/api/bookmarks/?course_id={self.owned_course.id}'
+        initial = self.client.get(url)
+        self.assertEqual(initial.status_code, 200)
+        self.assertEqual([item['id'] for item in initial.data], [bookmark.id for bookmark in bookmarks])
+        self.assertEqual(initial.data[0]['custom_order'], None)
+        self.assertEqual(initial.data[0]['saved_at'], initial.data[0]['created_at'])
+
+        order_url = f'/api/bookmarks/order/?course_id={self.owned_course.id}'
+        reordered = self.client.patch(order_url, {'bookmark_ids': [b.id for b in reversed(bookmarks)]}, format='json')
+        self.assertEqual(reordered.status_code, 200)
+        self.assertEqual(
+            [item['id'] for item in self.client.get(url).data],
+            [bookmark.id for bookmark in reversed(bookmarks)],
+        )
+
+        reset = self.client.post(f'/api/bookmarks/reset-order/?course_id={self.owned_course.id}', {}, format='json')
+        self.assertEqual(reset.status_code, 200)
+        self.assertEqual([item['id'] for item in self.client.get(url).data], [bookmark.id for bookmark in bookmarks])
 
 
 class AnswerTests(PracticeBase):

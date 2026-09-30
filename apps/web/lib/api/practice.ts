@@ -1,17 +1,20 @@
 import { apiClient } from "./client";
 export interface Question {
   id: number;
+  canonical_number?: number;
   text: string;
   option_a: string;
   option_b: string;
   option_c: string;
   option_d: string;
   difficulty: string;
+  hint?: string;
   correct_option?: string;
   explanation?: string;
 }
 
 export interface StartSessionParams {
+  course?: number | null;
   exam: string;
   subject: string;
   topic: string;
@@ -27,6 +30,7 @@ export interface PracticeSession {
   subject: number | null;
   topic: number | null;
   mode: string;
+  shuffle_questions: boolean;
   difficulty: string | null;
   total_questions: number;
   correct_count: number;
@@ -81,6 +85,8 @@ export interface SavedQuestion {
   question: number;
   question_detail: Question & { topic: number };
   created_at: string;
+  saved_at: string;
+  custom_order: number | null;
 }
 
 export interface AnswerResult {
@@ -185,6 +191,8 @@ export const practiceApi = {
     topic: string | number;
     subject?: string;
     exam?: string;
+    course?: number | null;
+    shuffle_questions?: boolean;
     restart?: boolean;
     page?: number;
     page_size?: number;
@@ -195,20 +203,31 @@ export const practiceApi = {
     });
   },
 
+  startSavedSession: (courseId?: number | null) => {
+    return apiClient<StudyPage>("/practice-sessions/saved/", {
+      method: "POST",
+      body: JSON.stringify({ course_id: courseId ?? undefined }),
+    });
+  },
+
   getStudyPage: (sessionId: number, page: number, pageSize: number) => {
     return apiClient<StudyPage>(
       `/practice-sessions/${sessionId}/questions/?page=${page}&page_size=${pageSize}`
     );
   },
 
-  getRevisionSummary: () => {
-    return apiClient<RevisionSummary>("/practice-sessions/revision_summary/");
+  getRevisionSummary: (courseId?: number | null) => {
+    const query = courseId == null ? "" : `?course_id=${courseId}`;
+    return apiClient<RevisionSummary>(`/practice-sessions/revision_summary/${query}`);
   },
 
-  startRevision: (focus?: RevisionFocus) => {
+  startRevision: (focus?: RevisionFocus, courseId?: number | null) => {
     return apiClient<RevisionSessionResponse>("/practice-sessions/start_revision/", {
       method: "POST",
-      body: JSON.stringify(focus ? { focus } : {}),
+      body: JSON.stringify({
+        ...(focus ? { focus } : {}),
+        ...(courseId == null ? {} : { course_id: courseId }),
+      }),
     });
   },
   
@@ -226,10 +245,10 @@ export const practiceApi = {
     return apiClient<SubmitSessionResponse>(`/practice-sessions/${sessionId}/result/`);
   },
 
-  toggleBookmark: (questionId: number) => {
+  toggleBookmark: (questionId: number, courseId?: number | null) => {
     return apiClient<{status: string; id?: number}>("/bookmarks/", {
       method: "POST",
-      body: JSON.stringify({ question_id: questionId }),
+      body: JSON.stringify({ question_id: questionId, course_id: courseId ?? undefined }),
     });
   },
 
@@ -240,5 +259,24 @@ export const practiceApi = {
     });
   },
 
-  listSavedQuestions: () => apiClient<SavedQuestion[]>("/bookmarks/"),
+  listSavedQuestions: (courseId?: number | null) => {
+    const query = courseId == null ? "" : `?course_id=${courseId}`;
+    return apiClient<SavedQuestion[]>(`/bookmarks/${query}`);
+  },
+
+  orderSavedQuestions: (bookmarkIds: number[], courseId?: number | null) => {
+    const query = courseId == null ? "" : `?course_id=${courseId}`;
+    return apiClient<{ status: string; count: number }>(`/bookmarks/order/${query}`, {
+      method: "PATCH",
+      body: JSON.stringify({ bookmark_ids: bookmarkIds }),
+    });
+  },
+
+  resetSavedQuestionOrder: (courseId?: number | null) => {
+    const query = courseId == null ? "" : `?course_id=${courseId}`;
+    return apiClient<{ status: string; count: number }>(`/bookmarks/reset-order/${query}`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  },
 };

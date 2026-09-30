@@ -30,8 +30,8 @@ export interface AdminQuestion {
 /** Where an imported Excel/CSV file lands. Chosen in the UI, applied to every row. */
 export interface ImportTarget {
   topic?: number | string;
-  question_type: 'mcq' | 'true_false' | 'subjective';
-  difficulty: 'easy' | 'medium' | 'hard';
+  question_type?: 'mcq' | 'true_false' | 'subjective';
+  difficulty?: 'easy' | 'medium' | 'hard';
   /** Optional: add every successfully imported question to this Collection. */
   collection_id?: number;
   /** Optional: attach these Tags to every successfully imported question. */
@@ -105,9 +105,9 @@ export const adminQuestionApi = {
   uploadCSV: async (file: File, target: ImportTarget) => {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('topic', String(target.topic));
-    formData.append('question_type', target.question_type);
-    formData.append('difficulty', target.difficulty);
+    if (target.topic) formData.append('topic', String(target.topic));
+    if (target.question_type) formData.append('question_type', target.question_type);
+    if (target.difficulty) formData.append('difficulty', target.difficulty);
     if (target.collection_id) formData.append('collection_id', String(target.collection_id));
     (target.tag_ids || []).forEach((id) => formData.append('tag_ids', String(id)));
     // No Content-Type header: the browser must set it so the multipart

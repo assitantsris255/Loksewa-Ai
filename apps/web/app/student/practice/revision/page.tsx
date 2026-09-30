@@ -17,6 +17,7 @@ import {
   REVISION_SIGNAL_LABELS,
 } from "@/lib/api/practice";
 import { useRevisionSummary } from "@/lib/practice-hooks";
+import { useOptionalStudentContext } from "@/contexts/StudentContext";
 import { ApiError } from "@/lib/api/client";
 import { practiceError } from "@/lib/practice-errors";
 
@@ -204,8 +205,10 @@ function RevisionContent() {
   const searchParams = useSearchParams();
   const requestedFocus = searchParams.get("focus") as RevisionFocus | null;
   const router = useRouter();
+  const studentCtx = useOptionalStudentContext();
+  const courseId = studentCtx?.activeCourse?.id ?? null;
 
-  const summaryQuery = useRevisionSummary();
+  const summaryQuery = useRevisionSummary(courseId);
   const summary = summaryQuery.data ?? null;
   const loading = summaryQuery.isLoading;
   const summaryError = summaryQuery.isError ? practiceError(summaryQuery.error, "load").message : null;
@@ -221,7 +224,7 @@ function RevisionContent() {
     setStarting(true);
     setStartError(null);
     try {
-      const data = await practiceApi.startRevision(focus);
+      const data = await practiceApi.startRevision(focus, courseId);
       setSession(data);
       setCurrentIndex(0);
       setAnswers({});

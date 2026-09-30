@@ -16,6 +16,7 @@ class SubscriptionPlan(models.Model):
     STATUS_CHOICES = (
         ('ACTIVE', 'Active'),
         ('INACTIVE', 'Inactive'),
+        ('ARCHIVED', 'Archived'),
     )
 
     BADGE_CHOICES = (
@@ -34,7 +35,7 @@ class SubscriptionPlan(models.Model):
     )
 
     name = models.CharField(max_length=255)
-    description = models.TextField()
+    description = models.TextField(blank=True)
     duration = models.IntegerField()
     duration_unit = models.CharField(max_length=20, choices=DURATION_UNIT_CHOICES, default='DAYS')
 

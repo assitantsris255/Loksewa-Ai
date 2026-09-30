@@ -37,7 +37,7 @@ export type ExaminationStatus =
 /** Examination.OBJECTIVE_CATEGORIES in exams/models.py — the four finalized
  * Objective Exam categories. Null/blank for non-objective exam_types like
  * 'subjective', and for exams created before this field existed. */
-export type ObjectiveCategory = 'old_past' | 'model' | 'live' | 'custom' | null;
+export type ObjectiveCategory = 'past_year' | 'model' | 'live' | 'topicwise' | null;
 
 export interface Examination {
   id: number;
@@ -53,6 +53,8 @@ export interface Examination {
   exam_name?: string;
   subject: number;
   subject_name?: string;
+  topic?: number | null;
+  topic_name?: string | null;
   question_set?: number;
   question_set_name?: string;
   instructions: string;
@@ -88,7 +90,16 @@ export interface Examination {
   upload_end_time?: string | null;
   allowed_file_types?: string;
   max_upload_size_mb?: number;
-  evaluation_type?: 'manual' | 'ai_assisted' | 'hybrid';
+  evaluation_type?: 'admin' | 'manual' | 'ai' | 'ai_assisted' | 'hybrid';
+}
+
+export interface AdminCourseOption {
+  id: number;
+  title: string;
+  exam: {
+    id: number;
+    category_id: number | null;
+  } | null;
 }
 
 export interface AdminSubjectiveSubmission {
@@ -107,6 +118,8 @@ export interface AdminSubjectiveSubmission {
   page_count: number;
   file_size_bytes: number;
   has_answer_pdf: boolean;
+  is_pdf?: boolean;
+  file_name?: string;
   score: number;
   total_marks: number;
   percentage: number;
@@ -144,6 +157,43 @@ export interface AdminSubjectiveSubmissionDetail extends AdminSubjectiveSubmissi
   evaluator_feedback: string;
   pages: SubjectiveSubmissionPage[];
   question_scores: SubjectiveQuestionScore[];
+}
+
+export interface AdminExaminationRequest {
+  id: number;
+  request_type: 'exam_access' | 'subjective_live';
+  student: number;
+  student_name: string;
+  examination: number;
+  examination_title: string;
+  examination_status: string | null;
+  academic_exam: number | null;
+  requested_exam_name: string | null;
+  course: number | null;
+  requested_course_title: string | null;
+  subject: number | null;
+  requested_subject_name: string | null;
+  topic: number | null;
+  requested_topic_name: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  rejection_reason: string;
+  reviewed_by: number | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+export interface SubjectivePaperGenerationResult {
+  id: number;
+  title: string;
+  status: string;
+  total_questions: number;
+  total_marks: number;
+  time_limit?: number;
+  has_question_paper: boolean;
+  question_paper_page_count?: number;
+  question_paper_file_size?: number;
+  reused: boolean;
 }
 
 export interface ExamQueryParams {
@@ -300,6 +350,9 @@ function buildQueryString(params?: object): string {
 }
 
 export const adminExamApi = {
+  getPublishedCourses: async () =>
+    apiClient<AdminCourseOption[]>("/courses/public/?status=published"),
+
   getOverview: async () => {
     return apiClient<any>(`/admin/exams-overview/`);
   },
@@ -321,9 +374,43 @@ export const adminExamApi = {
     return apiClient<{ count: number; next: string | null; previous: string | null; results: Examination[] }>(`/admin/exams/${queryString}`);
   },
 
+  getExamRequests: (status?: AdminExaminationRequest['status']) =>
+    apiClient<AdminExaminationRequest[]>(`/admin/exam-requests/${buildQueryString({ status })}`),
+
+  getExamRequest: (id: number) => apiClient<AdminExaminationRequest>(`/admin/exam-requests/${id}/`),
+
+  approveExamRequest: (id: number) =>
+    apiClient<AdminExaminationRequest>(`/admin/exam-requests/${id}/approve/`, { method: 'POST' }),
+
+  rejectExamRequest: (id: number, rejection_reason: string) =>
+    apiClient<AdminExaminationRequest>(`/admin/exam-requests/${id}/reject/`, {
+      method: 'POST',
+      body: JSON.stringify({ rejection_reason }),
+    }),
+
   getExam: async (id: number) => {
     return apiClient<Examination>(`/admin/exams/${id}/`);
   },
+
+  generateSubjectiveLiveExam: (payload: {
+    generation_key: string;
+    request_id?: number;
+    exam: number;
+    course?: number;
+    subject?: number;
+    topic?: number;
+    title?: string;
+    question_count: number;
+    time_limit: number;
+    start_time?: string | null;
+    end_time?: string | null;
+    instructions?: string;
+    question_type: 'subjective' | 'objective' | 'mixed' | 'mcq' | 'true_false';
+    regenerate?: boolean;
+  }) => apiClient<SubjectivePaperGenerationResult>('/admin/exams/generate-subjective-live/', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
 
   createExam: async (data: Partial<Examination>) => {
     return apiClient<Examination>('/admin/exams/', {
@@ -459,7 +546,15 @@ export const adminExamApi = {
     return apiClient<AdminSubjectiveSubmission[]>(`/admin/exams/${examId}/submissions/${query}`);
   },
 
-  getAllSubjectiveSubmissions: async (params?: { exam_id?: number; status?: string; search?: string }) => {
+  getAllSubjectiveSubmissions: async (params?: {
+    exam_id?: number;
+    status?: string;
+    search?: string;
+    student_id?: number;
+    evaluation_status?: string;
+    date_from?: string;
+    date_to?: string;
+  }) => {
     const qs = buildQueryString(params);
     return apiClient<AdminSubjectiveSubmission[]>(`/admin/subjective-submissions/${qs}`);
   },

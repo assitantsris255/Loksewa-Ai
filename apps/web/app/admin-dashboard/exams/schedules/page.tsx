@@ -41,6 +41,7 @@ export default function AdminExamSchedulesPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [examTypeFilter, setExamTypeFilter] = useState<string>("all");
 
   // Options for form
   const [categories, setCategories] = useState<CategoryOption[]>([]);
@@ -54,6 +55,7 @@ export default function AdminExamSchedulesPage() {
   // Form fields
   const [formData, setFormData] = useState({
     title: "",
+    exam_type: "all",
     exam_category: "",
     exam: "",
     description: "",
@@ -71,7 +73,7 @@ export default function AdminExamSchedulesPage() {
     try {
       setLoading(true);
       const [schedulesRes, catsRes, examsRes] = await Promise.all([
-        schedulesApi.getAdminSchedules(),
+        schedulesApi.getAdminSchedules({ exam_type: examTypeFilter }),
         apiClient<any>("/admin/syllabus/categories/?page_size=100").catch(() => []),
         apiClient<any>("/admin/syllabus/exams/?page_size=100").catch(() => []),
       ]);
@@ -86,15 +88,15 @@ export default function AdminExamSchedulesPage() {
     }
   };
 
-
   useEffect(() => {
     loadData();
-  }, []);
+  }, [examTypeFilter]);
 
   const openCreateModal = () => {
     setEditingSchedule(null);
     setFormData({
       title: "",
+      exam_type: examTypeFilter !== "all" ? examTypeFilter : "all",
       exam_category: "",
       exam: "",
       description: "",
@@ -114,6 +116,7 @@ export default function AdminExamSchedulesPage() {
     setEditingSchedule(schedule);
     setFormData({
       title: schedule.title,
+      exam_type: schedule.exam_type || "all",
       exam_category: schedule.exam_category ? String(schedule.exam_category) : "",
       exam: schedule.exam ? String(schedule.exam) : "",
       description: schedule.description || "",
@@ -144,6 +147,7 @@ export default function AdminExamSchedulesPage() {
       setSubmitting(true);
       const payload: Partial<OfficialExamSchedule> = {
         title: formData.title.trim(),
+        exam_type: (formData.exam_type as any) || "all",
         exam_category: formData.exam_category ? Number(formData.exam_category) : null,
         exam: formData.exam ? Number(formData.exam) : null,
         description: formData.description.trim(),
@@ -220,6 +224,10 @@ export default function AdminExamSchedulesPage() {
 
     if (!matchSearch) return false;
 
+    if (examTypeFilter !== "all") {
+      if (s.exam_type && s.exam_type !== "all" && s.exam_type !== examTypeFilter) return false;
+    }
+
     if (statusFilter === "active") return s.is_active;
     if (statusFilter === "published") return s.is_published;
     if (statusFilter === "draft") return !s.is_published;
@@ -278,6 +286,11 @@ export default function AdminExamSchedulesPage() {
                       {activeSchedule.category_name}
                     </Badge>
                   )}
+                  {activeSchedule.exam_type && activeSchedule.exam_type !== "all" && (
+                    <Badge variant="secondary" className="bg-[#D4A72C]/20 text-[#D4A72C] text-[11px] font-bold border-none uppercase tracking-wider">
+                      {activeSchedule.exam_type === "topicwise" ? "Topicwise Test" : activeSchedule.exam_type === "subjective" ? "Subjective Exam" : "Objective Exam"}
+                    </Badge>
+                  )}
                 </div>
                 {activeSchedule.description && (
                   <p className="text-xs text-slate-300 max-w-2xl">{activeSchedule.description}</p>
@@ -318,18 +331,34 @@ export default function AdminExamSchedulesPage() {
           />
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <Filter className="w-4 h-4 text-slate-400" />
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4A72C]"
-          >
-            <option value="all">All Schedules</option>
-            <option value="active">Active Next Exam</option>
-            <option value="published">Published</option>
-            <option value="draft">Drafts</option>
-          </select>
+        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Type:</span>
+            <select
+              value={examTypeFilter}
+              onChange={(e) => setExamTypeFilter(e.target.value)}
+              className="px-3 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4A72C]"
+            >
+              <option value="all">All Exam Types</option>
+              <option value="topicwise">Topicwise Test</option>
+              <option value="objective">Objective Exam</option>
+              <option value="subjective">Subjective Exam</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Filter className="w-4 h-4 text-slate-400" />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="px-3 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4A72C]"
+            >
+              <option value="all">All Statuses</option>
+              <option value="active">Active Next Exam</option>
+              <option value="published">Published</option>
+              <option value="draft">Drafts</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -340,6 +369,7 @@ export default function AdminExamSchedulesPage() {
             <TableHeader>
               <TableRow className="bg-slate-50 hover:bg-slate-50">
                 <TableHead className="text-slate-700">Exam Title & Details</TableHead>
+                <TableHead className="text-slate-700">Exam Type</TableHead>
                 <TableHead className="text-slate-700">Category & Level</TableHead>
                 <TableHead className="text-slate-700">Exam Date & Time</TableHead>
                 <TableHead className="text-slate-700">Application Deadline</TableHead>
@@ -350,13 +380,13 @@ export default function AdminExamSchedulesPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-32 text-center bg-white">
+                  <TableCell colSpan={7} className="h-32 text-center bg-white">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredSchedules.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-32 text-center text-slate-500 bg-white">
+                  <TableCell colSpan={7} className="h-32 text-center text-slate-500 bg-white">
                     No exam schedules found. Click "Add Exam Schedule" to create one.
                   </TableCell>
                 </TableRow>
@@ -378,6 +408,27 @@ export default function AdminExamSchedulesPage() {
                           <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{item.description}</p>
                         )}
                       </div>
+                    </TableCell>
+
+                    {/* Exam Type */}
+                    <TableCell>
+                      {item.exam_type === "topicwise" ? (
+                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-bold">
+                          Topicwise Test
+                        </Badge>
+                      ) : item.exam_type === "objective" ? (
+                        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] font-bold">
+                          Objective Exam
+                        </Badge>
+                      ) : item.exam_type === "subjective" ? (
+                        <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 text-[10px] font-bold">
+                          Subjective Exam
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-200 text-[10px] font-semibold">
+                          All Types
+                        </Badge>
+                      )}
                     </TableCell>
 
                     {/* Category */}
@@ -479,17 +530,35 @@ export default function AdminExamSchedulesPage() {
           </DialogHeader>
 
           <form onSubmit={handleSubmit} className="space-y-4 pt-2">
-            {/* Title */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Exam Title <span className="text-red-500">*</span>
-              </label>
-              <Input
-                placeholder="e.g. Loksewa Section Officer 2083 First Paper"
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                required
-              />
+            {/* Title & Exam Type */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Exam Title <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  placeholder="e.g. Loksewa Section Officer 2083 First Paper"
+                  value={formData.title}
+                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Exam Type <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={formData.exam_type}
+                  onChange={(e) => setFormData({ ...formData, exam_type: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-md text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#D4A72C]"
+                >
+                  <option value="all">All Exam Types</option>
+                  <option value="topicwise">Topicwise Test</option>
+                  <option value="objective">Objective Exam</option>
+                  <option value="subjective">Subjective Exam</option>
+                </select>
+              </div>
             </div>
 
             {/* Category and Position */}

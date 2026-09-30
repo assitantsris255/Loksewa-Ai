@@ -18,7 +18,8 @@ from core.models import User, AdminSettings
 from courses.models import Course, Enrollment
 from exams.models import (
     ExamCategory, Exam, Paper, Subject, Chapter, Topic, Question,
-    Examination, ExaminationQuestion, ExaminationAttempt, SubjectivePracticeSet
+    Examination, ExaminationQuestion, ExaminationAttempt, SubjectivePracticeSet,
+    ExaminationRequest, QuestionMastery, Bookmark,
 )
 from subscriptions.models import Subscription, SubscriptionPlan
 
@@ -219,10 +220,329 @@ class StudentExamAccessControlTestCase(APITestCase):
         self.assertIn(self.computer_exam.id, comp_ids)
         self.assertNotIn(self.civil_exam.id, comp_ids)
 
+    def test_practice_exam_tree_respects_course_scope(self):
+        """The practice syllabus tree must honor the active course filter, not all authorized exams."""
+        self.client.force_authenticate(self.student_multi)
+
+        res = self.client.get(f'/api/exams/?course_id={self.course_civil.id}')
+        self.assertEqual(res.status_code, 200)
+
+        tree_exam_ids = [item['id'] for item in res.data]
+        self.assertIn(self.exam_civil.id, tree_exam_ids)
+        self.assertNotIn(self.exam_computer.id, tree_exam_ids)
+
+        civil_exam = next(item for item in res.data if item['id'] == self.exam_civil.id)
+        subject_names = [subject['name'] for subject in civil_exam.get('subjects', [])]
+        self.assertIn(self.subject_civil.name, subject_names)
+        self.assertNotIn(self.subject_computer.name, subject_names)
+
         # Attempting to request unauthorized course (Geomatic) returns 0 exams (empty list)
         res_geo = self.client.get(f'/api/student/exams/?course_id={self.course_geomatic.id}')
         self.assertEqual(res_geo.status_code, 200)
         self.assertEqual(len(res_geo.data), 0)
+
+    def test_weak_topic_quick_start_excludes_other_revision_signals(self):
+        """Weak Topic is a focused Master Bank draw, not the mixed revision queue."""
+        now = timezone.now()
+        QuestionMastery.objects.create(
+            user=self.student_multi,
+            question=self.q_civil,
+            times_answered=3,
+            times_incorrect=3,
+            consecutive_incorrect=3,
+            last_attempted_at=now,
+            next_review_at=now + timedelta(days=1),
+        )
+        QuestionMastery.objects.create(
+            user=self.student_multi,
+            question=self.q_computer,
+            times_answered=1,
+            times_incorrect=1,
+            consecutive_incorrect=1,
+            last_attempted_at=now,
+            next_review_at=now + timedelta(days=1),
+        )
+
+        self.client.force_authenticate(self.student_multi)
+        response = self.client.post(
+            '/api/practice-sessions/start_revision/',
+            {'focus': 'weak_topics'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        question_ids = [question['id'] for question in response.data['questions']]
+        self.assertEqual(question_ids, [self.q_civil.id])
+
+    def test_topicwise_test_list_is_published_and_course_scoped(self):
+        civil_test = Examination.objects.create(
+            title='Civil Topic Test', exam_type='subject', category=self.category,
+            exam=self.exam_civil, course=self.course_civil, subject=self.subject_civil,
+            topic=self.topic_civil, status='published', total_questions=1,
+            time_limit=15, total_marks=1,
+        )
+        Examination.objects.create(
+            title='Computer Topic Test', exam_type='subject', category=self.category,
+            exam=self.exam_computer, course=self.course_computer, subject=self.subject_computer,
+            topic=self.topic_computer, status='published', total_questions=1,
+            time_limit=15, total_marks=1,
+        )
+        Examination.objects.create(
+            title='Civil Draft Topic Test', exam_type='subject', category=self.category,
+            exam=self.exam_civil, course=self.course_civil, subject=self.subject_civil,
+            topic=self.topic_civil, status='draft', total_questions=1,
+            time_limit=15, total_marks=1,
+        )
+
+        self.client.force_authenticate(self.student_civil)
+        response = self.client.get(
+            f'/api/student/exams/?course_id={self.course_civil.id}&topicwise=true'
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([exam['id'] for exam in response.data], [civil_test.id])
+        self.assertEqual(response.data[0]['topic_id'], self.topic_civil.id)
+
+    def test_mock_exam_requires_admin_approval_before_attempt_creation(self):
+        self.client.force_authenticate(self.student_civil)
+        request_url = '/api/student/exam-requests/'
+        first = self.client.post(request_url, {'examination': self.civil_exam.id}, format='json')
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.data['status'], 'pending')
+
+        duplicate = self.client.post(request_url, {'examination': self.civil_exam.id}, format='json')
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertEqual(ExaminationRequest.objects.filter(student=self.student_civil, examination=self.civil_exam).count(), 1)
+
+        blocked = self.client.post(f'/api/student/exams/{self.civil_exam.id}/start/')
+        self.assertEqual(blocked.status_code, 403)
+        self.assertFalse(ExaminationAttempt.objects.filter(student=self.student_civil, examination=self.civil_exam).exists())
+
+        self.client.force_authenticate(self.admin_user)
+        approved = self.client.post(f'/api/admin/exam-requests/{first.data["id"]}/approve/')
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.data['status'], 'approved')
+
+        self.client.force_authenticate(self.student_civil)
+        started = self.client.post(f'/api/student/exams/{self.civil_exam.id}/start/')
+        self.assertEqual(started.status_code, 201)
+        self.assertTrue(ExaminationAttempt.objects.filter(student=self.student_civil, examination=self.civil_exam).exists())
+
+    def test_admin_rejection_reason_is_persisted_and_student_cannot_review_requests(self):
+        self.client.force_authenticate(self.student_civil)
+        created = self.client.post(
+            '/api/student/exam-requests/', {'examination': self.civil_exam.id}, format='json'
+        )
+        request_id = created.data['id']
+        self.assertEqual(self.client.post(f'/api/admin/exam-requests/{request_id}/approve/').status_code, 403)
+
+        self.client.force_authenticate(self.admin_user)
+        rejected = self.client.post(
+            f'/api/admin/exam-requests/{request_id}/reject/',
+            {'rejection_reason': 'Please select the next scheduled session.'},
+            format='json',
+        )
+        self.assertEqual(rejected.status_code, 200)
+        self.assertEqual(rejected.data['status'], 'rejected')
+        self.assertEqual(rejected.data['rejection_reason'], 'Please select the next scheduled session.')
+
+        self.client.force_authenticate(self.student_civil)
+        listed = self.client.get('/api/student/exam-requests/')
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.data[0]['rejection_reason'], 'Please select the next scheduled session.')
+
+    def test_subjective_exam_request_requires_admin_approval_before_start(self):
+        from exams.models import ExaminationRequest
+
+        subjective_exam = Examination.objects.create(
+            title='Civil Subjective Live Exam', exam_type='subjective',
+            category=self.category, exam=self.exam_civil, course=self.course_civil,
+            status='published', time_limit=90, total_marks=10,
+        )
+        ExaminationQuestion.objects.create(
+            examination=subjective_exam,
+            question=Question.objects.create(
+                topic=self.topic_civil, question_type='subjective', status='approved',
+                text='Explain reinforced concrete.', model_answer='Reference.', marks=10,
+            ),
+            order=1, marks=10,
+        )
+        self.client.force_authenticate(self.student_civil)
+
+        request = self.client.post(
+            '/api/student/exam-requests/', {'examination': subjective_exam.id}, format='json'
+        )
+        self.assertEqual(request.status_code, 201)
+        blocked = self.client.post(f'/api/student/exams/{subjective_exam.id}/start/')
+        self.assertEqual(blocked.status_code, 403)
+
+        self.client.force_authenticate(self.admin_user)
+        approved = self.client.post(f'/api/admin/exam-requests/{request.data["id"]}/approve/')
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(ExaminationRequest.objects.get(pk=request.data['id']).status, 'approved')
+
+        self.client.force_authenticate(self.student_civil)
+        started = self.client.post(f'/api/student/exams/{subjective_exam.id}/start/')
+        self.assertEqual(started.status_code, 201)
+        self.assertTrue(ExaminationAttempt.objects.filter(
+            student=self.student_civil, examination=subjective_exam
+        ).exists())
+
+    def test_student_can_request_subjective_live_exam_before_examination_exists(self):
+        self.client.force_authenticate(self.student_civil)
+        payload = {
+            'request_type': 'subjective_live',
+            'academic_exam': self.exam_civil.id,
+            'course': self.course_civil.id,
+            'subject': self.subject_civil.id,
+            'topic': self.topic_civil.id,
+        }
+
+        created = self.client.post('/api/student/exam-requests/', payload, format='json')
+
+        self.assertEqual(created.status_code, 201, created.data)
+        self.assertEqual(created.data['request_type'], 'subjective_live')
+        self.assertIsNone(created.data['examination'])
+        self.assertEqual(created.data['academic_exam'], self.exam_civil.id)
+        repeated = self.client.post('/api/student/exam-requests/', payload, format='json')
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(repeated.data['id'], created.data['id'])
+
+        unauthorized = self.client.post(
+            '/api/student/exam-requests/',
+            {**payload, 'course': self.course_computer.id, 'academic_exam': self.exam_computer.id},
+            format='json',
+        )
+        self.assertEqual(unauthorized.status_code, 403)
+
+    def test_expert_solution_uses_real_question_data_and_is_hidden_during_live_attempts(self):
+        self.client.force_authenticate(self.student_civil)
+        solution_url = f'/api/student/exams/{self.civil_exam.id}/expert-solution/'
+        solution = self.client.get(solution_url)
+        self.assertEqual(solution.status_code, 200)
+        self.assertEqual(solution.data['solutions'][0]['correct_option'], 'A')
+
+        ExaminationAttempt.objects.create(
+            examination=self.civil_exam, student=self.student_civil, status='in-progress'
+        )
+        active_solution = self.client.get(solution_url)
+        self.assertEqual(active_solution.status_code, 403)
+
+        live_exam = Examination.objects.create(
+            title='Scheduled Civil Live Exam', exam_type='mock', objective_category='live',
+            category=self.category, exam=self.exam_civil, course=self.course_civil, status='published',
+        )
+        live_solution = self.client.get(f'/api/student/exams/{live_exam.id}/expert-solution/')
+        self.assertEqual(live_solution.status_code, 403)
+
+    def test_saved_practice_and_bookmarks_respect_the_selected_course(self):
+        civil_bookmark = Bookmark.objects.create(user=self.student_multi, question=self.q_civil)
+        Bookmark.objects.create(user=self.student_multi, question=self.q_computer)
+        Bookmark.objects.create(user=self.student_multi, question=self.q_geomatic)
+        self.client.force_authenticate(self.student_multi)
+
+        list_response = self.client.get(f'/api/bookmarks/?course_id={self.course_civil.id}')
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual([item['id'] for item in list_response.data], [civil_bookmark.id])
+        bookmark_question = list_response.data[0]['question_detail']
+        self.assertNotIn('correct_option', bookmark_question)
+        self.assertNotIn('explanation', bookmark_question)
+
+        session_response = self.client.post(
+            '/api/practice-sessions/saved/',
+            {'course_id': self.course_civil.id},
+            format='json',
+        )
+        self.assertEqual(session_response.status_code, 200)
+        self.assertEqual(session_response.data['session']['mode'], 'saved')
+        self.assertEqual(session_response.data['total_questions'], 1)
+        self.assertEqual([question['id'] for question in session_response.data['questions']], [self.q_civil.id])
+
+    def test_recently_incorrect_uses_latest_persisted_exam_answers_and_course_scope(self):
+        from exams.models import StudentAnswer
+
+        now = timezone.now()
+        civil_wrong = ExaminationAttempt.objects.create(
+            examination=self.civil_exam,
+            student=self.student_multi,
+            status='submitted',
+            submitted_at=now - timedelta(minutes=2),
+        )
+        StudentAnswer.objects.create(
+            attempt=civil_wrong,
+            question=self.q_civil,
+            selected_option='A',
+            is_correct=False,
+        )
+        computer_wrong = ExaminationAttempt.objects.create(
+            examination=self.computer_exam,
+            student=self.student_multi,
+            status='submitted',
+            submitted_at=now - timedelta(minutes=1),
+        )
+        StudentAnswer.objects.create(
+            attempt=computer_wrong,
+            question=self.q_computer,
+            selected_option='A',
+            is_correct=False,
+        )
+
+        self.client.force_authenticate(self.student_multi)
+        first = self.client.post(
+            '/api/practice-sessions/start_revision/',
+            {'focus': 'recent_mistakes', 'course_id': self.course_civil.id},
+            format='json',
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual([q['id'] for q in first.data['questions']], [self.q_civil.id])
+
+        civil_correct = ExaminationAttempt.objects.create(
+            examination=self.civil_exam,
+            student=self.student_multi,
+            status='submitted',
+            submitted_at=now,
+        )
+        StudentAnswer.objects.create(
+            attempt=civil_correct,
+            question=self.q_civil,
+            selected_option='B',
+            is_correct=True,
+        )
+        second = self.client.post(
+            '/api/practice-sessions/start_revision/',
+            {'focus': 'recent_mistakes', 'course_id': self.course_civil.id},
+            format='json',
+        )
+        self.assertEqual(second.status_code, 400)
+
+    def test_topicwise_active_attempt_hides_answers_and_refresh_keeps_server_deadline(self):
+        self.client.force_authenticate(self.student_civil)
+        ExaminationRequest.objects.create(
+            student=self.student_civil,
+            examination=self.civil_exam,
+            status='approved',
+            reviewed_by=self.admin_user,
+            reviewed_at=timezone.now(),
+        )
+
+        started = self.client.post(f'/api/student/exams/{self.civil_exam.id}/start/')
+        self.assertEqual(started.status_code, 201)
+        attempt_id = started.data['id']
+        questions = self.client.get(f'/api/student/exam-attempts/{attempt_id}/questions/')
+        self.assertEqual(questions.status_code, 200)
+        self.assertNotIn('correct_option', questions.data[0])
+        self.assertNotIn('explanation', questions.data[0])
+
+        started_at = timezone.now() - timedelta(seconds=30)
+        ExaminationAttempt.objects.filter(pk=attempt_id).update(started_at=started_at)
+        first_state = self.client.get(f'/api/student/exam-attempts/{attempt_id}/state/')
+        second_state = self.client.get(f'/api/student/exam-attempts/{attempt_id}/state/')
+
+        self.assertEqual(first_state.status_code, 200)
+        self.assertEqual(second_state.status_code, 200)
+        self.assertLessEqual(second_state.data['remaining_seconds'], first_state.data['remaining_seconds'])
+        self.assertLessEqual(first_state.data['remaining_seconds'] - second_state.data['remaining_seconds'], 2)
+        self.assertEqual(ExaminationAttempt.objects.get(pk=attempt_id).started_at, started_at)
 
     def test_attempt_access_control(self):
         """A student cannot access an attempt on an exam they are not authorized for."""

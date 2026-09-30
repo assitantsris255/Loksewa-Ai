@@ -10,7 +10,7 @@ from rest_framework import status
 from openpyxl import Workbook
 from exams.models import (
     ExamCategory, Exam, Paper, Subject, Topic, Chapter,
-    Examination, ExaminationQuestion, ExaminationAttempt, Question
+    Examination, ExaminationQuestion, ExaminationAttempt, ExaminationRequest, Question
 )
 from courses.models import Course, Enrollment
 
@@ -288,6 +288,12 @@ class ExamImportWorkflowTests(APITestCase):
             answer_upload_enabled=True,
             status='published',
             created_by=self.admin,
+        )
+
+        ExaminationRequest.objects.create(
+            student=self.student,
+            examination=exam,
+            status='approved',
         )
 
         # Student starts exam

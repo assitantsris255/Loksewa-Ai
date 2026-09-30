@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { practiceApi, PracticeSessionResponse, Question } from "@/lib/api/practice";
 import { Button } from "@/components/ui/button";
 import { Loader2, Clock, CheckCircle2, ChevronLeft, ChevronRight, Flag, Star, AlertCircle } from "lucide-react";
-import { useFocusMode } from "@/contexts/FocusModeContext";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSavedQuestions, practiceResultKey } from "@/lib/practice-hooks";
+import { useOptionalStudentContext } from "@/contexts/StudentContext";
 import { notify } from "@/lib/notify";
 import { practiceError, practiceErrorMessage, PracticeError } from "@/lib/practice-errors";
 import { QuestionSkeleton } from "@/components/practice/TopicPracticeBrowser";
@@ -15,8 +15,9 @@ import { QuestionSkeleton } from "@/components/practice/TopicPracticeBrowser";
 function PracticeSessionContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { beginExamFocus, endExamFocus } = useFocusMode();
   const queryClient = useQueryClient();
+  const studentCtx = useOptionalStudentContext();
+  const courseId = studentCtx?.activeCourse?.id ?? null;
 
 
   const exam = searchParams.get("exam");
@@ -35,6 +36,7 @@ function PracticeSessionContent() {
   const [startError, setStartError] = useState<PracticeError | null>(null);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const startRequested = useRef(false);
 
   const initSession = async () => {
     setLoading(true);
@@ -44,6 +46,7 @@ function PracticeSessionContent() {
         // The backend treats the literal string "all" as "no filter" for
         // exam/subject/topic — sending "-1" instead used to be filtered as
         // a real (nonexistent) id and returned zero questions.
+        course: courseId,
         exam: exam || "all",
         subject: subject || "all",
         topic: topic || "all",
@@ -64,18 +67,11 @@ function PracticeSessionContent() {
   };
 
   useEffect(() => {
+    if (startRequested.current) return;
+    startRequested.current = true;
     initSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (sessionData && sessionData.session?.id) {
-      beginExamFocus({ attemptId: sessionData.session.id });
-    }
-    return () => {
-      endExamFocus();
-    };
-  }, [sessionData, beginExamFocus, endExamFocus]);
 
   // Record that the current question was displayed, independent of whether
   // the student ends up selecting an option.

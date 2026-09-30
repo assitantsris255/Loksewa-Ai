@@ -76,7 +76,7 @@ class PublicSyllabusTreeView(APIView):
         # subscription context to check premium access against).
         materials_by_exam: dict = {}
         materials_qs = StudyMaterial.objects.filter(
-            exam__in=exams, status='published', access_type='free',
+            exam__in=exams, status='published', access_type='free', content_category='syllabus',
         ).order_by('order', 'title')
         for m in materials_qs:
             file_url = None

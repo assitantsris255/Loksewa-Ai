@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { 
-  Search, Filter, PlusCircle, FileText, ChevronRight, MoreHorizontal,
+  Search, Filter, PlusCircle, FileText, ChevronRight, MoreHorizontal, ClipboardList, Inbox, Award,
   Clock, DownloadCloud, Lock, Unlock, Eye, HelpCircle, Archive, Trash2, Calendar
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -20,29 +20,28 @@ import { adminExamApi, Examination, ObjectiveCategory } from "@/lib/api/admin-ex
 import { toast } from "sonner";
 
 const CATEGORY_LABELS: Record<string, string> = {
-  old_past: "Old Past Exam",
+  past_year: "Past Year Paper",
   model: "Model Exam",
   live: "Live Exam",
-  custom: "Create Your Own",
+  topicwise: "Topicwise Exam",
 };
 
 const CategoryBadge = ({ category, examType }: { category: ObjectiveCategory; examType?: string }) => {
-  if (!category) {
-    // objective_category is null by design for subjective exams (they sit
-    // outside the old_past/model/live/custom scheme) - showing "Uncategorized"
-    // there reads as a data gap rather than the intentional state it is.
-    if (examType === "subjective") {
-      return <Badge variant="outline" className="bg-violet-50 text-violet-700 border-violet-200">Subjective</Badge>;
-    }
-    return <span className="text-xs text-slate-400 italic">Uncategorized</span>;
+  if (examType === "subjective") {
+    return <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 font-bold">Subjective Exam</Badge>;
   }
-  const styles: Record<string, string> = {
-    old_past: "bg-slate-100 text-slate-700 border-slate-200",
-    model: "bg-blue-50 text-blue-700 border-blue-200",
-    live: "bg-red-50 text-red-700 border-red-200",
-    custom: "bg-purple-50 text-purple-700 border-purple-200",
-  };
-  return <Badge variant="outline" className={styles[category] || ""}>{CATEGORY_LABELS[category] || category}</Badge>;
+  if (examType === "subject" || category === "topicwise") {
+    return <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 font-bold">Topicwise Test</Badge>;
+  }
+  if (category) {
+    const styles: Record<string, string> = {
+      past_year: "bg-slate-100 text-slate-700 border-slate-200",
+      model: "bg-blue-50 text-blue-700 border-blue-200",
+      live: "bg-red-50 text-red-700 border-red-200",
+    };
+    return <Badge variant="outline" className={styles[category] || ""}>{CATEGORY_LABELS[category] || category}</Badge>;
+  }
+  return <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 font-bold">Objective Exam</Badge>;
 };
 
 const StatusBadge = ({ status }: { status: string }) => {
@@ -61,6 +60,7 @@ const StatusBadge = ({ status }: { status: string }) => {
 
 export default function ExamsOverviewPage() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [majorArea, setMajorArea] = useState<"all" | "topicwise" | "objective" | "subjective">("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [exams, setExams] = useState<Examination[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,10 +107,28 @@ export default function ExamsOverviewPage() {
       e.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (e.category_name || '').toLowerCase().includes(searchQuery.toLowerCase())
     )
-    .filter(e =>
-      categoryFilter === "all" ||
-      (categoryFilter === "subjective" ? e.exam_type === "subjective" : e.objective_category === categoryFilter)
-    );
+    .filter(e => {
+      // 1. Major area filtering
+      if (majorArea === "topicwise") {
+        if (e.exam_type !== "subject" && e.objective_category !== "topicwise") return false;
+      } else if (majorArea === "objective") {
+        if (e.exam_type === "subjective" || e.exam_type === "subject" || e.objective_category === "topicwise") return false;
+      } else if (majorArea === "subjective") {
+        if (e.exam_type !== "subjective") return false;
+      }
+
+      // 2. Sub-category filter
+      if (categoryFilter !== "all") {
+        if (categoryFilter === "subjective") {
+          if (e.exam_type !== "subjective") return false;
+        } else if (categoryFilter === "topicwise") {
+          if (e.exam_type !== "subject" && e.objective_category !== "topicwise") return false;
+        } else if (e.objective_category !== categoryFilter) {
+          return false;
+        }
+      }
+      return true;
+    });
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -135,19 +153,103 @@ export default function ExamsOverviewPage() {
             <h3 className="text-2xl font-bold text-amber-600">{stats?.draftModelExams || 0}</h3>
           </div>
         </div>
-        <div className="flex gap-2 w-full md:w-auto">
-          <Link href="/admin-dashboard/exams/import" className="w-1/2 md:w-auto">
+        <div className="flex flex-wrap gap-2 w-full md:w-auto">
+          <Link href="/admin-dashboard/exams/submissions" className="w-full sm:w-auto">
+            <Button variant="outline" className="w-full border-purple-200 text-purple-700 hover:bg-purple-50">
+              <Award className="w-4 h-4 mr-2 text-purple-600" /> Submissions
+            </Button>
+          </Link>
+          <Link href="/admin-dashboard/exams/requests" className="w-full sm:w-auto">
+            <Button variant="outline" className="w-full">
+              <Inbox className="w-4 h-4 mr-2" /> Requests
+            </Button>
+          </Link>
+          <Link href="/admin-dashboard/exams/import" className="w-full sm:w-auto">
             <Button variant="outline" className="w-full">
               <DownloadCloud className="w-4 h-4 mr-2" /> Import Exam
             </Button>
           </Link>
-          <Link href="/admin-dashboard/exams/new" className="w-1/2 md:w-auto">
+          <Link href="/admin-dashboard/exams/new" className="w-full sm:w-auto">
             <Button className="w-full bg-[#0B2545] text-white hover:bg-[#163E6C]">
               <PlusCircle className="w-4 h-4 mr-2" /> Create Exam
             </Button>
           </Link>
         </div>
       </div>
+
+      {/* ── 3 Major Exam Areas Navigation Tabs ────────────────────────── */}
+      <div className="bg-slate-100 p-1.5 rounded-xl border border-slate-200 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => { setMajorArea("all"); setCategoryFilter("all"); }}
+          className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+            majorArea === "all"
+              ? "bg-white text-[#0B2545] shadow-sm ring-1 ring-slate-200"
+              : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
+          }`}
+        >
+          All Exams ({exams.length})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setMajorArea("topicwise"); setCategoryFilter("all"); }}
+          className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+            majorArea === "topicwise"
+              ? "bg-emerald-600 text-white shadow-sm"
+              : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
+          }`}
+        >
+          <ClipboardList className="w-3.5 h-3.5" />
+          1. Topicwise Test
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setMajorArea("objective"); setCategoryFilter("all"); }}
+          className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+            majorArea === "objective"
+              ? "bg-[#0B2545] text-white shadow-sm"
+              : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
+          }`}
+        >
+          <FileText className="w-3.5 h-3.5" />
+          2. Objective Exams
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setMajorArea("subjective"); setCategoryFilter("all"); }}
+          className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+            majorArea === "subjective"
+              ? "bg-purple-700 text-white shadow-sm"
+              : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
+          }`}
+        >
+          <Award className="w-3.5 h-3.5" />
+          3. Subjective Exams
+        </button>
+      </div>
+
+      {/* Subjective Exams Submissions Banner */}
+      {majorArea === "subjective" && (
+        <div className="bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-900 text-white rounded-xl p-5 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div>
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-400/20 text-purple-200 border border-purple-400/30 uppercase tracking-wider mb-1.5">
+              <Award className="w-3.5 h-3.5" /> Subjective Exams Workspace
+            </div>
+            <h3 className="text-lg font-bold text-white">Subjective Submissions &amp; Paper Evaluation</h3>
+            <p className="text-xs text-purple-200 mt-1 max-w-xl">
+              Inspect student handwritten PDF &amp; image answer sheets, run AI handwriting transcription, award per-question marks, and publish official results.
+            </p>
+          </div>
+          <Link href="/admin-dashboard/exams/submissions">
+            <Button className="bg-white text-indigo-950 hover:bg-purple-50 font-bold text-xs gap-1.5 shadow-md shrink-0">
+              <Award className="w-4 h-4 text-purple-600" /> View Submissions &amp; Grading
+            </Button>
+          </Link>
+        </div>
+      )}
 
       {/* Filters & Search */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col lg:flex-row gap-4 items-end lg:items-center justify-between">
@@ -162,31 +264,28 @@ export default function ExamsOverviewPage() {
         </div>
         
         <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-          <div className="relative">
-            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
-            <select
-              value={categoryFilter}
-              onChange={e => setCategoryFilter(e.target.value)}
-              className="h-9 pl-8 pr-3 rounded-md border border-slate-200 bg-slate-50 text-sm text-slate-600 focus:outline-none"
-            >
-              <option value="all">Type: All</option>
-              <option value="old_past">Old Past Exams</option>
-              <option value="model">Model Exams</option>
-              <option value="live">Live Exams</option>
-              <option value="custom">Create Your Own</option>
-              <option value="subjective">Subjective Exams</option>
-            </select>
-          </div>
-          <Button variant="outline" size="sm" className="bg-slate-50 text-slate-600 border-slate-200">
-            <Filter className="w-4 h-4 mr-2" /> Status: All
-          </Button>
+          {majorArea === "objective" && (
+            <div className="relative">
+              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+              <select
+                value={categoryFilter}
+                onChange={e => setCategoryFilter(e.target.value)}
+                className="h-9 pl-8 pr-3 rounded-md border border-slate-200 bg-slate-50 text-sm text-slate-600 focus:outline-none"
+              >
+                <option value="all">Category: All Objective</option>
+                <option value="past_year">Past Year Papers</option>
+                <option value="model">Model Exams</option>
+                <option value="live">Live Exams</option>
+              </select>
+            </div>
+          )}
           <Button
             variant="ghost"
             size="sm"
             className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-            onClick={() => { setSearchQuery(""); setCategoryFilter("all"); }}
+            onClick={() => { setSearchQuery(""); setCategoryFilter("all"); setMajorArea("all"); }}
           >
-            Clear
+            Clear Filters
           </Button>
         </div>
       </div>
