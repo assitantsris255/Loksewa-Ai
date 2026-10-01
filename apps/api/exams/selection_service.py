@@ -86,11 +86,13 @@ class QuestionSelectionService:
         """
         if exam_ids is not None:
             qs = qs.filter(
+                Q(exam_id__in=list(exam_ids)) |
                 Q(subject__paper__exam_id__in=list(exam_ids)) |
                 Q(topic__chapter__subject__paper__exam_id__in=list(exam_ids))
             )
         if exam_id:
             qs = qs.filter(
+                Q(exam_id=exam_id) |
                 Q(subject__paper__exam_id=exam_id) |
                 Q(topic__chapter__subject__paper__exam_id=exam_id)
             )
@@ -113,6 +115,8 @@ class QuestionSelectionService:
             qs = qs.filter(topic_id=topic_id)
         if category_id:
             qs = qs.filter(
+                Q(category_id=category_id) |
+                Q(exam__category_id=category_id) |
                 Q(subject__paper__exam__category_id=category_id) |
                 Q(topic__chapter__subject__paper__exam__category_id=category_id)
             )

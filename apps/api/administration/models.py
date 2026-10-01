@@ -24,6 +24,14 @@ class CSVImport(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     # Syllabus placement and defaults are chosen in the UI, not in the CSV, and
     # apply to every row of the file.
+    category = models.ForeignKey(
+        'exams.ExamCategory', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='csv_imports',
+    )
+    exam = models.ForeignKey(
+        'exams.Exam', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='csv_imports',
+    )
     subject = models.ForeignKey(
         'exams.Subject', on_delete=models.SET_NULL, null=True, blank=True,
         related_name='csv_imports',
@@ -37,7 +45,7 @@ class CSVImport(models.Model):
         related_name='csv_imports',
     )
     question_type = models.CharField(max_length=20, default='mcq')
-    difficulty = models.CharField(max_length=10, default='medium')
+    difficulty = models.CharField(max_length=10, default='medium', blank=True, null=True)
     # Optional: imported questions can be added to a Collection and/or tagged.
     # Membership/tagging does not bypass approval - see commit() in import_views.py.
     collection = models.ForeignKey(

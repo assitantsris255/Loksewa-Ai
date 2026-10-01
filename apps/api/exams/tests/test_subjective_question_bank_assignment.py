@@ -1,7 +1,9 @@
 import os
+from tempfile import TemporaryDirectory
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -25,6 +27,25 @@ def make_pdf_bytes():
 
 
 class SubjectiveQuestionBankAssignmentTests(APITestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._media_directory = TemporaryDirectory()
+        cls._storage_override = override_settings(
+            STORAGES={
+                'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+                'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+            },
+            MEDIA_ROOT=cls._media_directory.name,
+        )
+        cls._storage_override.enable()
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        cls._storage_override.disable()
+        cls._media_directory.cleanup()
+
     def setUp(self):
         self.admin = User.objects.create_superuser(
             username='subjective_admin',

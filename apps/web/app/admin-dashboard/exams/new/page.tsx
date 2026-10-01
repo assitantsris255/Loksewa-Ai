@@ -11,6 +11,8 @@ import {
 import { QuestionSelectionWorkspace } from "@/components/admin/exams/QuestionSelectionWorkspace";
 import { adminExamApi, AdminCourseOption, Examination, ExaminationType, ObjectiveCategory } from "@/lib/api/admin-exams";
 import { adminSyllabusApi } from "@/lib/api/admin-syllabus";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { adminSubjectiveSetsApi, SubjectiveQuestionSet } from "@/lib/api/admin-subjective-sets";
 import toast from "react-hot-toast";
 
 const STEPS = [
@@ -74,6 +76,8 @@ export default function CreateExamPage() {
   const typeParam = searchParams?.get("type");
   const subjectiveRequestParam = searchParams?.get("subjectiveRequest");
   const subjectiveRequestId = subjectiveRequestParam ? Number(subjectiveRequestParam) : null;
+  const subjectiveSetParam = searchParams?.get("subjectiveSet");
+  const subjectiveSetId = subjectiveSetParam ? Number(subjectiveSetParam) : null;
   // "Use in Mock Exam" from the admin Collections page arrives here.
   const collectionParam = searchParams?.get("collection");
   const defaultCollectionId = collectionParam ? Number(collectionParam) : null;
@@ -81,7 +85,7 @@ export default function CreateExamPage() {
   const initialMajorType: MajorExamType =
     topicwiseParam || typeParam === "topicwise"
       ? "topicwise"
-      : typeParam === "subjective" || subjectiveRequestParam
+      : typeParam === "subjective" || subjectiveRequestParam || subjectiveSetParam
       ? "subjective"
       : "objective";
 
@@ -147,6 +151,7 @@ export default function CreateExamPage() {
   const [evaluationType, setEvaluationType] = useState<"admin" | "ai" | "hybrid">("admin");
   const [subjectiveTotalMarks, setSubjectiveTotalMarks] = useState(100);
   const [uploadingPdf, setUploadingPdf] = useState(false);
+  const [pendingSubjectiveSetId, setPendingSubjectiveSetId] = useState<number | null>(subjectiveSetId);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const applyExam = useCallback((e: Examination) => {
@@ -228,6 +233,36 @@ export default function CreateExamPage() {
     })();
     return () => { active = false; };
   }, [subjectiveRequestId, draftParam]);
+
+  useEffect(() => {
+    if (!subjectiveSetId || draftParam) return;
+    let active = true;
+    (async () => {
+      try {
+        const setDetails = await adminSubjectiveSetsApi.getSet(subjectiveSetId);
+        if (!active) return;
+        setExamType("subjective");
+        setMajorType("subjective");
+        setObjectiveCategory("");
+        setTitle((prev) => (prev ? prev : `${setDetails.title} Examination`));
+        if (setDetails.category_id || setDetails.exam_category) {
+          setCategoryId(setDetails.category_id || setDetails.exam_category);
+        }
+        if (setDetails.level_id || setDetails.level) {
+          setPositionId(setDetails.level_id || setDetails.level);
+        }
+        if (setDetails.course) setCourseId(setDetails.course);
+        if (setDetails.subject) setSubjectId(setDetails.subject);
+        if (setDetails.duration_minutes) setTimeLimit(setDetails.duration_minutes);
+        if (setDetails.total_marks) setSubjectiveTotalMarks(setDetails.total_marks);
+        setPendingSubjectiveSetId(setDetails.id);
+        toast.success(`Loaded "${setDetails.title}" paper template`);
+      } catch {
+        if (active) toast.error("Could not load the subjective question set details.");
+      }
+    })();
+    return () => { active = false; };
+  }, [subjectiveSetId, draftParam]);
 
   // Recover an existing draft after a refresh.
   useEffect(() => {
@@ -428,6 +463,53 @@ export default function CreateExamPage() {
     }
   };
 
+  const [isSelectBankSetOpen, setIsSelectBankSetOpen] = useState(false);
+  const [bankSets, setBankSets] = useState<SubjectiveQuestionSet[]>([]);
+  const [loadingBankSets, setLoadingBankSets] = useState(false);
+  const [assigningBankSet, setAssigningBankSet] = useState(false);
+
+  const openSelectBankSetModal = async () => {
+    let targetExamId = examId;
+    if (!targetExamId) {
+      targetExamId = await persist({ silent: true });
+      if (!targetExamId) return;
+    }
+    setIsSelectBankSetOpen(true);
+    setLoadingBankSets(true);
+    try {
+      const res = await adminSubjectiveSetsApi.getSets({
+        status: 'active',
+        exam_category: categoryId,
+        level: positionId,
+      });
+      const list = Array.isArray(res) ? res : res.results || [];
+      setBankSets(list);
+    } catch {
+      toast.error("Could not fetch subjective question sets from bank.");
+    } finally {
+      setLoadingBankSets(false);
+    }
+  };
+
+  const handleAssignBankSet = async (setId: number) => {
+    if (!examId) return;
+    setAssigningBankSet(true);
+    try {
+      const updated = await adminExamApi.assignSubjectiveSet(examId, setId);
+      setHasQuestionPaper(true);
+      setQuestionPaperPageCount(updated.question_paper_page_count || 1);
+      setQuestionPaperFileSize(updated.question_paper_file_size || 0);
+      if (updated.time_limit) setTimeLimit(updated.time_limit);
+      if (updated.total_marks) setSubjectiveTotalMarks(updated.total_marks);
+      toast.success("Subjective Question Paper assigned from bank!");
+      setIsSelectBankSetOpen(false);
+    } catch (err: any) {
+      toast.error(err?.data?.detail || err.message || "Failed to assign question set.");
+    } finally {
+      setAssigningBankSet(false);
+    }
+  };
+
   /** Creates the Examination on first save, then PATCHes. Returns its id. */
   const persist = async (opts: { silent?: boolean } = {}): Promise<number | null> => {
     if (!title.trim()) { toast.error("The exam needs a title."); setStep(1); return null; }
@@ -455,6 +537,19 @@ export default function CreateExamPage() {
         ...(subjectiveRequestId ? { request_id: subjectiveRequestId } : {}),
       } as Partial<Examination> & { request_id?: number });
       setExamId(created.id);
+
+      if (pendingSubjectiveSetId) {
+        try {
+          const updated = await adminExamApi.assignSubjectiveSet(created.id, pendingSubjectiveSetId);
+          setHasQuestionPaper(true);
+          setQuestionPaperPageCount(updated.question_paper_page_count || 1);
+          setQuestionPaperFileSize(updated.question_paper_file_size || 0);
+          setPendingSubjectiveSetId(null);
+        } catch {
+          toast.error("Draft created, but failed to auto-attach the question paper PDF.");
+        }
+      }
+
       // Put the id in the URL so a refresh recovers the draft.
       router.replace(`/admin-dashboard/exams/new?draft=${created.id}`);
       if (!opts.silent) toast.success("Draft saved");
@@ -930,6 +1025,14 @@ export default function CreateExamPage() {
                       </button>
                       <button
                         type="button"
+                        onClick={openSelectBankSetModal}
+                        disabled={uploadingPdf}
+                        className="px-3.5 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors"
+                      >
+                        <LayoutList className="w-4 h-4 text-slate-500" /> Choose From Bank
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => fileInputRef.current?.click()}
                         disabled={uploadingPdf}
                         className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors"
@@ -950,8 +1053,7 @@ export default function CreateExamPage() {
                 </div>
               ) : (
                 <div
-                  onClick={() => !uploadingPdf && fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-slate-300 hover:border-indigo-400 bg-slate-50 hover:bg-indigo-50/20 rounded-xl p-8 text-center cursor-pointer transition-all group"
+                  className="border-2 border-dashed border-slate-300 hover:border-indigo-400 bg-slate-50 hover:bg-indigo-50/20 rounded-xl p-8 text-center transition-all group"
                 >
                   <div className="mx-auto w-14 h-14 rounded-2xl bg-white shadow-sm border border-slate-200 flex items-center justify-center group-hover:scale-105 transition-transform mb-3">
                     {uploadingPdf ? (
@@ -961,18 +1063,30 @@ export default function CreateExamPage() {
                     )}
                   </div>
                   <h4 className="font-semibold text-slate-800 text-base">
-                    {uploadingPdf ? "Uploading and processing question paper..." : "Click to upload Question Paper PDF"}
+                    {uploadingPdf ? "Uploading and processing question paper..." : "Attach Official Question Paper PDF"}
                   </h4>
                   <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                    Supported format: Adobe PDF (.pdf) up to 25MB. Page count and metadata will be parsed automatically.
+                    Upload an Adobe PDF document or select an existing paper from the Subjective Question Bank.
                   </p>
-                  <button
-                    type="button"
-                    disabled={uploadingPdf}
-                    className="mt-4 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 shadow-sm group-hover:border-indigo-300"
-                  >
-                    Select PDF Document
-                  </button>
+                  <div className="flex flex-wrap items-center justify-center gap-3 mt-4">
+                    <button
+                      type="button"
+                      disabled={uploadingPdf}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 shadow-sm hover:border-indigo-300 transition-colors"
+                    >
+                      Upload New PDF
+                    </button>
+                    <span className="text-xs text-slate-400 font-semibold uppercase">Or</span>
+                    <button
+                      type="button"
+                      disabled={uploadingPdf}
+                      onClick={openSelectBankSetModal}
+                      className="px-4 py-2 bg-indigo-50 border border-indigo-200 rounded-lg text-sm font-medium text-indigo-700 shadow-sm hover:bg-indigo-100 transition-colors"
+                    >
+                      Select from Subjective Question Bank
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1346,6 +1460,79 @@ export default function CreateExamPage() {
           )}
         </div>
       </div>
+
+      {/* Select from Subjective Question Bank Dialog */}
+      <Dialog open={isSelectBankSetOpen} onOpenChange={setIsSelectBankSetOpen}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold text-[#0B2545]">
+              Select Question Paper from Subjective Question Bank
+            </DialogTitle>
+          </DialogHeader>
+
+          {loadingBankSets ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-3">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+              <p className="text-sm text-slate-500">Loading active question papers...</p>
+            </div>
+          ) : bankSets.length === 0 ? (
+            <div className="text-center py-12 text-slate-500 space-y-2">
+              <FileText className="w-10 h-10 mx-auto text-slate-300" />
+              <p className="font-medium text-slate-700">No active subjective question sets found.</p>
+              <p className="text-xs text-slate-500">
+                Upload sets in Subjective Question Bank or upload a PDF directly.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3 pt-2">
+              {bankSets.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border border-slate-200 rounded-xl hover:border-indigo-300 hover:bg-indigo-50/20 transition-all"
+                >
+                  <div className="space-y-1">
+                    <h4 className="font-semibold text-slate-900">{s.title}</h4>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                      <span className="bg-slate-100 px-2 py-0.5 rounded font-medium text-slate-700">
+                        {s.category_name} - {s.level_name}
+                      </span>
+                      {s.subject_name && (
+                        <span className="bg-slate-100 px-2 py-0.5 rounded font-medium text-slate-700">
+                          {s.subject_name}
+                        </span>
+                      )}
+                      <span>{s.duration_minutes} mins</span>
+                      <span>•</span>
+                      <span>{s.total_marks} Marks</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {s.pdf_file && (
+                      <a
+                        href={s.pdf_file}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3 py-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg flex items-center gap-1"
+                      >
+                        <Eye className="w-3.5 h-3.5" /> Preview
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      disabled={assigningBankSet}
+                      onClick={() => handleAssignBankSet(s.id)}
+                      className="px-3.5 py-1.5 bg-[#0B2545] hover:bg-[#133E6D] text-white text-xs font-semibold rounded-lg shadow-sm flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                    >
+                      {assigningBankSet ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileCheck className="w-3.5 h-3.5" />}
+                      Assign Paper
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -8,7 +8,7 @@ from .permissions import IsAdminUser
 from django.http import HttpResponse
 from django.db import transaction
 from administration.models import CSVImport, AuditLog
-from exams.models import Question, Topic, QuestionCollection
+from exams.models import Question, Topic, QuestionCollection, ExamCategory, Exam, Subject, Chapter
 from core.models import Tag
 from ai_tutor.services import AdminAILogic
 
@@ -28,6 +28,10 @@ def _response_payload(import_record):
     counts = _recount(import_record.report_data)
     return {
         'import_id': import_record.id,
+        'category_id': import_record.category_id,
+        'position_id': import_record.exam_id,
+        'subject_id': import_record.subject_id,
+        'chapter_id': import_record.chapter_id,
         'topic_id': import_record.topic_id,
         'question_type': import_record.question_type,
         'difficulty': import_record.difficulty,
@@ -85,21 +89,85 @@ class QuestionImportViewSet(viewsets.ModelViewSet):
         if not (is_excel or is_csv):
             return Response({'error': 'Please upload a valid Excel (.xlsx) or CSV file.'}, status=400)
 
+        category = None
+        category_id = request.data.get('category') or request.data.get('category_id')
+        if category_id and str(category_id) not in ('null', 'undefined', ''):
+            try:
+                category = ExamCategory.objects.get(pk=category_id)
+            except (ExamCategory.DoesNotExist, ValueError, TypeError):
+                return Response({'error': 'The selected category no longer exists.'}, status=400)
+
+        exam = None
+        position_id = request.data.get('position') or request.data.get('position_id') or request.data.get('exam') or request.data.get('exam_id')
+        if position_id and str(position_id) not in ('null', 'undefined', ''):
+            try:
+                exam = Exam.objects.select_related('category').get(pk=position_id)
+            except (Exam.DoesNotExist, ValueError, TypeError):
+                return Response({'error': 'The selected level/position no longer exists.'}, status=400)
+
+        subject = None
+        subject_id = request.data.get('subject') or request.data.get('subject_id')
+        if subject_id and str(subject_id) not in ('null', 'undefined', ''):
+            try:
+                subject = Subject.objects.select_related('paper__exam__category').get(pk=subject_id)
+            except (Subject.DoesNotExist, ValueError, TypeError):
+                return Response({'error': 'The selected subject no longer exists.'}, status=400)
+
+        chapter = None
+        chapter_id = request.data.get('chapter') or request.data.get('chapter_id')
+        if chapter_id and str(chapter_id) not in ('null', 'undefined', ''):
+            try:
+                chapter = Chapter.objects.select_related('subject__paper__exam__category').get(pk=chapter_id)
+            except (Chapter.DoesNotExist, ValueError, TypeError):
+                return Response({'error': 'The selected chapter no longer exists.'}, status=400)
+
         topic = None
         topic_id = request.data.get('topic') or request.data.get('topic_id')
         if topic_id and str(topic_id) not in ('null', 'undefined', ''):
             try:
-                topic = Topic.objects.select_related('chapter', 'chapter__subject').get(pk=topic_id)
+                topic = Topic.objects.select_related('chapter__subject__paper__exam__category').get(pk=topic_id)
             except (Topic.DoesNotExist, ValueError, TypeError):
                 return Response({'error': 'The selected topic no longer exists.'}, status=400)
 
-        question_type = (request.data.get('question_type') or 'mcq').strip().lower()
-        if question_type not in ALL_TYPES:
-            return Response({'error': f'Unsupported question_type: {question_type}'}, status=400)
+        # Auto-infer parents upwards
+        if topic:
+            if not chapter and topic.chapter:
+                chapter = topic.chapter
+            if not subject and chapter and chapter.subject:
+                subject = chapter.subject
+        if chapter:
+            if not subject and chapter.subject:
+                subject = chapter.subject
+        if subject:
+            if not exam and subject.paper and subject.paper.exam:
+                exam = subject.paper.exam
+            if not category and exam and exam.category:
+                category = exam.category
+        if exam and not category and exam.category:
+            category = exam.category
 
-        difficulty = (request.data.get('difficulty') or 'medium').strip().lower()
-        if difficulty not in ('easy', 'medium', 'hard'):
-            return Response({'error': f'Unsupported difficulty: {difficulty}'}, status=400)
+        # Academic consistency checks:
+        if exam and category and exam.category_id != category.id:
+            return Response({'error': f"Position/Level '{exam.name}' does not belong to category '{category.name}'."}, status=400)
+        if subject and exam:
+            subject_exam_id = subject.paper.exam_id if (subject.paper_id and subject.paper) else None
+            is_valid_exam = (
+                subject_exam_id == exam.id or
+                (subject.paper and subject.paper.exam and subject.paper.exam.parent_id == exam.id)
+            )
+            if not is_valid_exam:
+                return Response({'error': f"Subject '{subject.name}' does not belong to level/position '{exam.name}'."}, status=400)
+        if chapter and subject and chapter.subject_id != subject.id:
+            return Response({'error': f"Chapter '{chapter.title}' does not belong to subject '{subject.name}'."}, status=400)
+        if topic and chapter and topic.chapter_id != chapter.id:
+            return Response({'error': f"Topic '{topic.name}' does not belong to chapter '{chapter.title}'."}, status=400)
+
+        question_type = (request.data.get('question_type') or 'mcq').strip().lower() or 'mcq'
+        if question_type not in ALL_TYPES:
+            question_type = 'mcq'
+
+        raw_difficulty = (request.data.get('difficulty') or '').strip().lower()
+        difficulty = raw_difficulty if raw_difficulty in ('easy', 'medium', 'hard') else 'medium'
 
         collection = None
         collection_id = request.data.get('collection_id')
@@ -150,6 +218,10 @@ class QuestionImportViewSet(viewsets.ModelViewSet):
             admin=request.user,
             file_name=file.name,
             status='validated',
+            category=category,
+            exam=exam,
+            subject=subject,
+            chapter=chapter,
             topic=topic,
             question_type=question_type,
             difficulty=difficulty,
@@ -267,8 +339,12 @@ class QuestionImportViewSet(viewsets.ModelViewSet):
                 continue
             marks_raw = (data.get('marks') or '').strip()
             questions_to_create.append(Question(
-                topic_id=import_record.topic_id,
-                question_type=import_record.question_type,
+                category=import_record.category or (import_record.exam.category if import_record.exam else None),
+                exam=import_record.exam,
+                subject=import_record.subject or (import_record.chapter.subject if import_record.chapter else (import_record.topic.chapter.subject if import_record.topic and import_record.topic.chapter else None)),
+                chapter=import_record.chapter or (import_record.topic.chapter if import_record.topic else None),
+                topic=import_record.topic,
+                question_type=import_record.question_type or 'mcq',
                 text=data['question'],
                 # Objective-only fields stay empty for subjective questions.
                 option_a='' if is_subjective else (data.get('option_a') or ''),
@@ -280,7 +356,7 @@ class QuestionImportViewSet(viewsets.ModelViewSet):
                 explanation=data.get('explanation') or '',
                 hint=data.get('hint') or '',
                 marks=float(marks_raw) if marks_raw else 1,
-                difficulty=import_record.difficulty,
+                difficulty=import_record.difficulty or 'medium',
                 status='approved',
                 created_by=request.user,
             ))

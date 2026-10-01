@@ -1,12 +1,14 @@
-from rest_framework import viewsets, status, serializers
+from rest_framework import viewsets, status, serializers, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Count, Avg
 from django.utils import timezone
 import copy
 
 from exams.models import (
     Exam as AcademicExam,
+    ExamCategory,
     Examination,
     ExaminationAttempt,
     ExaminationQuestion,
@@ -16,6 +18,7 @@ from exams.models import (
     SubjectiveQuestionSet,
     Topic,
 )
+from courses.models import Course
 from exams.assignment_service import SubjectiveExamAssignmentService
 from exams.selection_service import QuestionSelectionService
 from exams.student_serializers import ExaminationRequestSerializer
@@ -29,20 +32,55 @@ from .examination_question_views import ExaminationQuestionMixin
 from .permissions import IsAdminUser, IsEvaluatorUser
 
 
+from rest_framework.pagination import PageNumberPagination
+
+
+class SubjectiveQuestionSetPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class SubjectiveQuestionSetSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='exam_category.name', read_only=True)
+    category_id = serializers.IntegerField(source='exam_category_id', read_only=True)
     level_name = serializers.CharField(source='level.name', read_only=True)
+    level_id = serializers.IntegerField(read_only=True)
     course_name = serializers.CharField(source='course.title', read_only=True, allow_null=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True, allow_null=True)
     created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True, allow_null=True)
     usage_count = serializers.IntegerField(read_only=True)
     last_used_at = serializers.DateTimeField(read_only=True)
+    file_name = serializers.SerializerMethodField()
+    file_size = serializers.SerializerMethodField()
+
+    def get_file_name(self, obj):
+        try:
+            if not obj.pdf_file:
+                return None
+            basename = obj.pdf_file.name.replace('\\', '/').split('/')[-1]
+            if '__' in basename:
+                parts = basename.split('__', 1)
+                return parts[1] if len(parts) > 1 else basename
+            return basename
+        except Exception:
+            return None
+
+    def get_file_size(self, obj):
+        try:
+            return obj.pdf_file.size if obj.pdf_file else 0
+        except Exception:
+            return 0
 
     class Meta:
         model = SubjectiveQuestionSet
         fields = [
-            'id', 'title', 'description', 'pdf_file', 'category_name', 'level_name', 'course', 'course_name',
-            'subject', 'subject_name', 'duration_minutes', 'total_marks', 'question_count', 'status',
+            'id', 'title', 'description', 'pdf_file', 'file_name', 'file_size',
+            'exam_category', 'category_id', 'category_name',
+            'level', 'level_id', 'level_name',
+            'course', 'course_name',
+            'subject', 'subject_name',
+            'duration_minutes', 'total_marks', 'question_count', 'status',
             'created_by', 'created_by_name', 'created_at', 'updated_at', 'usage_count', 'last_used_at'
         ]
         read_only_fields = ['id', 'created_by', 'created_by_name', 'created_at', 'updated_at', 'usage_count', 'last_used_at']
@@ -69,7 +107,32 @@ class SubjectiveQuestionSetViewSet(viewsets.ModelViewSet):
         'exam_category', 'level', 'course', 'subject', 'created_by'
     ).order_by('-created_at')
     serializer_class = SubjectiveQuestionSetSerializer
+    pagination_class = SubjectiveQuestionSetPagination
     permission_classes = [IsAdminUser]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['title', 'description', 'subject__name', 'level__name', 'exam_category__name']
+    filterset_fields = {
+        'status': ['exact'],
+        'exam_category': ['exact'],
+        'level': ['exact'],
+        'subject': ['exact', 'isnull'],
+        'course': ['exact', 'isnull'],
+    }
+    ordering_fields = ['created_at', 'total_marks', 'duration_minutes', 'title']
+
+    @action(detail=True, methods=['post'], url_path='archive')
+    def archive(self, request, pk=None):
+        instance = self.get_object()
+        instance.status = 'archived'
+        instance.save(update_fields=['status', 'updated_at'])
+        return Response(self.get_serializer(instance).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='activate')
+    def activate(self, request, pk=None):
+        instance = self.get_object()
+        instance.status = 'active'
+        instance.save(update_fields=['status', 'updated_at'])
+        return Response(self.get_serializer(instance).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='assign')
     def assign(self, request, pk=None):
@@ -428,8 +491,17 @@ class ExaminationViewSet(ExaminationQuestionMixin, viewsets.ModelViewSet):
         if not exam.category_id or not exam.exam_id:
             errors.append("Academic targeting is incomplete: choose a category and a position.")
         is_subjective_pdf = exam.exam_type == 'subjective' and bool(exam.question_paper_pdf)
-        if not is_subjective_pdf and assigned < 1:
-            errors.append("Add at least one question (or upload a Question Paper PDF for subjective exams) before publishing.")
+        if exam.exam_type == 'subjective':
+            if not is_subjective_pdf and assigned < 1:
+                errors.append("Assign or upload a valid Subjective Question Paper (PDF) before publishing.")
+            elif exam.question_paper_pdf:
+                try:
+                    if not exam.question_paper_pdf.storage.exists(exam.question_paper_pdf.name):
+                        errors.append("The assigned question paper PDF file could not be found in storage.")
+                except Exception:
+                    pass
+        elif assigned < 1:
+            errors.append("Add at least one question before publishing.")
         if exam.exam_type == 'subject' and exam.topic_id:
             valid_assigned = exam.examination_questions.filter(
                 question__topic_id=exam.topic_id,
@@ -486,6 +558,40 @@ class ExaminationViewSet(ExaminationQuestionMixin, viewsets.ModelViewSet):
 
         serializer = self.get_serializer(exam)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='assign-subjective-set')
+    def assign_subjective_set(self, request, pk=None):
+        examination = self.get_object()
+        if examination.status == 'published':
+            return Response({'detail': 'Cannot modify paper on an already published examination.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        question_set_id = request.data.get('question_set_id')
+        if not question_set_id:
+            return Response({'detail': 'question_set_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from exams.models import SubjectiveQuestionSet
+        try:
+            qset = SubjectiveQuestionSet.objects.get(pk=question_set_id, status='active')
+        except SubjectiveQuestionSet.DoesNotExist:
+            return Response({'detail': 'Active subjective question set not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not qset.pdf_file:
+            return Response({'detail': 'The selected question set does not have an attached PDF file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        examination.subjective_question_set = qset
+        examination.question_paper_pdf = qset.pdf_file
+        examination.question_paper_page_count = 1
+        examination.question_paper_file_size = qset.pdf_file.size if qset.pdf_file else 0
+        if qset.duration_minutes:
+            examination.time_limit = qset.duration_minutes
+        if qset.total_marks:
+            examination.total_marks = qset.total_marks
+        if qset.question_count:
+            examination.total_questions = qset.question_count
+        examination.save()
+
+        serializer = self.get_serializer(examination)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
     def archive(self, request, pk=None):

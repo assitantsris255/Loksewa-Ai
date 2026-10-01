@@ -541,6 +541,13 @@ export const adminExamApi = {
     return await res.blob();
   },
 
+  assignSubjectiveSet: async (id: number, questionSetId: number) => {
+    return apiClient<Examination>(`/admin/exams/${id}/assign-subjective-set/`, {
+      method: 'POST',
+      body: JSON.stringify({ question_set_id: questionSetId }),
+    });
+  },
+
   getExamSubmissions: async (examId: number, status?: string) => {
     const query = status ? `?status=${status}` : '';
     return apiClient<AdminSubjectiveSubmission[]>(`/admin/exams/${examId}/submissions/${query}`);

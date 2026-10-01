@@ -146,6 +146,13 @@ class GoogleDriveStorageTests(TestCase):
         name = 'courses/thumbnails/photo.png'
         self.assertEqual(self.storage.get_available_name(name), name)
 
+    @patch('core.storage_backends.google_drive.get_file_url')
+    def test_file_id_with_double_underscore_parsed_correctly(self, mock_get_url):
+        mock_get_url.return_value = 'https://lh3.googleusercontent.com/d/1Bk__AKkagV0ydpcTt5e4IQp_ggIYaXLC'
+        url = self.storage.url('exams/question_papers/1Bk__AKkagV0ydpcTt5e4IQp_ggIYaXLC__officer_qp.pdf')
+        self.assertEqual(url, 'https://lh3.googleusercontent.com/d/1Bk__AKkagV0ydpcTt5e4IQp_ggIYaXLC')
+        mock_get_url.assert_called_once_with('1Bk__AKkagV0ydpcTt5e4IQp_ggIYaXLC', filename='officer_qp.pdf')
+
 
 class ResolveTargetFolderTests(TestCase):
     """get_or_create_drive_folder/_resolve_target_folder against a mocked
@@ -200,7 +207,7 @@ class ResolveTargetFolderTests(TestCase):
     @patch('core.google_drive.get_or_create_drive_folder')
     def test_unrecognized_category_routes_to_other(self, mock_get_or_create):
         mock_get_or_create.return_value = 'folder-id'
-        google_drive._resolve_target_folder('marketplace/covers/foo.jpg')
+        google_drive._resolve_target_folder('unknown_category/covers/foo.jpg')
         mock_get_or_create.assert_called_once_with('other', 'root-folder-id')
 
     @patch.dict('os.environ', DRIVE_ENV, clear=False)

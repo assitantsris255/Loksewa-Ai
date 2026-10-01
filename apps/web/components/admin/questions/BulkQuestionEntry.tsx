@@ -42,7 +42,6 @@ export function BulkQuestionEntry() {
 
   // Global Defaults
   const [qType, setQType] = useState<'mcq'>('mcq'); // Bulk mostly for MCQ right now
-  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [marks, setMarks] = useState(1);
   const [negativeMarks, setNegativeMarks] = useState(0);
 
@@ -227,8 +226,8 @@ export function BulkQuestionEntry() {
   };
 
   const handleSaveAll = async () => {
-    if (!selCategory || !selPosition || !selSubject) {
-      toast.error('Please select Category, Position/Level, and Subject.');
+    if (!selCategory || !selPosition) {
+      toast.error('Please select Category and Position/Level.');
       return;
     }
 
@@ -251,10 +250,9 @@ export function BulkQuestionEntry() {
       const payload = validRows.map(r => ({
         question_type: qType,
         status: 'published',
-        difficulty,
         category: Number(selCategory),
         position: Number(selPosition),
-        subject: Number(selSubject),
+        subject: selSubject ? Number(selSubject) : undefined,
         chapter: selChapter ? Number(selChapter) : null,
         topic: selTopic ? Number(selTopic) : null,
         marks: Number(marks),
@@ -293,6 +291,7 @@ export function BulkQuestionEntry() {
                 chapter={selChapter}
                 topic={selTopic}
                 onChange={handleAcademicChange}
+                requiredLevels={['category', 'position']}
                 maxLevel="topic"
                 layout="grid"
               />
@@ -303,16 +302,12 @@ export function BulkQuestionEntry() {
           <h2 className="text-sm font-semibold text-gray-800 mb-3 uppercase tracking-wider">2. Global Settings</h2>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase">Difficulty</label>
-              <select value={difficulty} onChange={(e: any) => setDifficulty(e.target.value)} className="mt-1 w-full border border-gray-200 rounded px-2 py-1 text-xs">
-                <option value="easy">Easy</option>
-                <option value="medium">Medium</option>
-                <option value="hard">Hard</option>
-              </select>
-            </div>
-            <div>
               <label className="block text-[10px] font-medium text-gray-500 uppercase">Marks</label>
               <input type="number" step="0.5" value={marks} onChange={e => setMarks(Number(e.target.value))} className="mt-1 w-full border border-gray-200 rounded px-2 py-1 text-xs" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-medium text-gray-500 uppercase">Negative Marks</label>
+              <input type="number" step="0.1" value={negativeMarks} onChange={e => setNegativeMarks(Number(e.target.value))} className="mt-1 w-full border border-gray-200 rounded px-2 py-1 text-xs" />
             </div>
           </div>
         </div>

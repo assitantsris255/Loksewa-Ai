@@ -29,6 +29,10 @@ export interface AdminQuestion {
 
 /** Where an imported Excel/CSV file lands. Chosen in the UI, applied to every row. */
 export interface ImportTarget {
+  category?: number | string;
+  position?: number | string;
+  subject?: number | string;
+  chapter?: number | string;
   topic?: number | string;
   question_type?: 'mcq' | 'true_false' | 'subjective';
   difficulty?: 'easy' | 'medium' | 'hard';
@@ -105,6 +109,10 @@ export const adminQuestionApi = {
   uploadCSV: async (file: File, target: ImportTarget) => {
     const formData = new FormData();
     formData.append('file', file);
+    if (target.category) formData.append('category', String(target.category));
+    if (target.position) formData.append('position', String(target.position));
+    if (target.subject) formData.append('subject', String(target.subject));
+    if (target.chapter) formData.append('chapter', String(target.chapter));
     if (target.topic) formData.append('topic', String(target.topic));
     if (target.question_type) formData.append('question_type', target.question_type);
     if (target.difficulty) formData.append('difficulty', target.difficulty);
@@ -128,13 +136,11 @@ export const adminQuestionApi = {
       existing_question_ids?: number[];
       all_question_ids?: number[];
     }>(`/admin/questions/import/${importId}/commit/`, { method: 'POST' }),
-  /** One template per question type - never a single MCQ-shaped template. */
-  downloadTemplate: async (type: 'mcq' | 'true_false' | 'subjective' = 'mcq') =>
+  /** Objective question template */
+  downloadTemplate: async (type: 'mcq' | 'true_false' = 'mcq') =>
     downloadFile(
       `/admin/questions/import/template/?type=${type}`,
-      type === 'subjective' ? 'Subjective Question Template.xlsx'
-        : type === 'true_false' ? 'True-False Question Template.xlsx'
-        : 'Objective Question Template.xlsx',
+      type === 'true_false' ? 'True-False Question Template.xlsx' : 'Objective Question Template.xlsx',
     ),
   downloadErrorReport: async (importId: number | string) =>
     downloadFile(`/admin/questions/import/${importId}/error-report/`, `import_${importId}_errors.xlsx`),

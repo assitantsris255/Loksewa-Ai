@@ -45,11 +45,11 @@ export default function TopicStudyPage() {
   const activeExam = useMemo(() => exams.find(e => e.id.toString() === exam), [exam, exams]);
   const activeSubject = useMemo(() => activeExam?.subjects?.find(s => s.id.toString() === subject), [activeExam, subject]);
   const allTopics = useMemo(
-    () => (activeSubject?.units ?? activeSubject?.chapters ?? []).flatMap(u => u.topics || []) || [],
+    () => (((activeSubject?.units ?? (activeSubject as any)?.chapters ?? []) as any[]).flatMap((u: any) => u.topics || [])) as any[],
     [activeSubject]
   );
   const activeUnit = useMemo(
-    () => (activeSubject?.units ?? activeSubject?.chapters ?? [])?.find(u => (u.topics || []).some(t => t.id.toString() === topic)),
+    () => (((activeSubject?.units ?? (activeSubject as any)?.chapters ?? []) as any[])?.find((u: any) => (u.topics || []).some((t: any) => t.id.toString() === topic))) as any,
     [activeSubject, topic]
   );
 
@@ -82,7 +82,7 @@ export default function TopicStudyPage() {
       <div className="p-4 md:p-8 max-w-[1200px] mx-auto space-y-6" aria-busy="true">
         <div>
           <h1 className="text-[22px] font-bold tracking-tight text-primary dark:text-foreground">
-            {allTopics.find(t => t.id.toString() === topic)?.name || "Topic"}
+            {allTopics.find((t: any) => t.id.toString() === topic)?.name || "Topic"}
           </h1>
           <p className="text-muted-foreground text-[14px]">Loading your questions…</p>
         </div>
@@ -92,7 +92,7 @@ export default function TopicStudyPage() {
   }
 
   if (session) {
-    const topicName = allTopics.find(t => t.id.toString() === topic)?.name;
+    const topicName = allTopics.find((t: any) => t.id.toString() === topic)?.name;
     return (
       <div className="p-4 md:p-8 max-w-[1200px] mx-auto space-y-6 animate-in fade-in-50 duration-500">
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -198,7 +198,7 @@ export default function TopicStudyPage() {
                 ? "No subjects available for this exam"
                 : "Select a subject"}
             </option>
-            {activeExam?.subjects?.map(s => (
+            {activeExam?.subjects?.map((s: any) => (
               <option key={s.id} value={s.id.toString()}>
                 {s.name || s.title}
               </option>
@@ -221,7 +221,7 @@ export default function TopicStudyPage() {
                 ? "No topics available for this subject"
                 : "Select a topic"}
             </option>
-            {allTopics.map(t => (
+            {allTopics.map((t: any) => (
               <option key={t.id} value={t.id.toString()}>
                 {t.name || t.title}
               </option>

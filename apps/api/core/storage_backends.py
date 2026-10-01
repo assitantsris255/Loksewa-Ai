@@ -47,13 +47,19 @@ def _parse_file_id(name):
     _, basename = _split_name(name)
     if '__' not in basename:
         return None
-    file_id, _, _rest = basename.partition('__')
-    # Drive file IDs are alphanumeric plus - and _, and reasonably long;
-    # a bare filename that happens to contain "__" won't match this shape
-    # closely enough to matter since we control the format on write.
-    if not file_id or ' ' in file_id:
-        return None
-    return file_id
+    # Google Drive file IDs are base64url characters and may contain double
+    # underscores ('__'). If basename contains multiple '__', partition('__')
+    # would incorrectly cut the file ID short (e.g. '1Bk__AKkag...' -> '1Bk').
+    cand_r, _, _rest_r = basename.rpartition('__')
+    cand_l, _, _rest_l = basename.partition('__')
+    if cand_r and not any(c in cand_r for c in ' /\\'):
+        if len(cand_l) < 15 and len(cand_r) >= 15:
+            return cand_r
+    if cand_l and not any(c in cand_l for c in ' /\\'):
+        return cand_l
+    if cand_r and not any(c in cand_r for c in ' /\\'):
+        return cand_r
+    return None
 
 
 class GoogleDriveStorage(Storage):
@@ -76,7 +82,8 @@ class GoogleDriveStorage(Storage):
         drive_file = google_drive.upload_file(name, file_obj, mime_type=mime_type)
 
         directory, basename = _split_name(name)
-        new_basename = f"{drive_file['id']}__{basename}"
+        clean_basename = basename.replace('__', '_')
+        new_basename = f"{drive_file['id']}__{clean_basename}"
         return f'{directory}/{new_basename}' if directory else new_basename
 
     def exists(self, name):
@@ -113,7 +120,11 @@ class GoogleDriveStorage(Storage):
         if file_id is None:
             return ''
         _, basename = _split_name(name)
-        original_filename = basename.split('__', 1)[1]
+        prefix = f'{file_id}__'
+        if basename.startswith(prefix):
+            original_filename = basename[len(prefix):]
+        else:
+            original_filename = basename.split('__', 1)[1] if '__' in basename else basename
         return google_drive.get_file_url(file_id, filename=original_filename)
 
     def get_available_name(self, name, max_length=None):

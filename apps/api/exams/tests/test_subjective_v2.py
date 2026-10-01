@@ -1,9 +1,11 @@
 import io
+from tempfile import TemporaryDirectory
 from PIL import Image
 from datetime import timedelta
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from rest_framework.test import APITestCase
 from rest_framework import status
 
@@ -35,6 +37,25 @@ def create_dummy_image(color='blue'):
 
 
 class SubjectiveExamWorkflowTests(APITestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._media_directory = TemporaryDirectory()
+        cls._storage_override = override_settings(
+            STORAGES={
+                'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+                'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+            },
+            MEDIA_ROOT=cls._media_directory.name,
+        )
+        cls._storage_override.enable()
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        cls._storage_override.disable()
+        cls._media_directory.cleanup()
+
     def setUp(self):
         # 1. Users
         self.admin = User.objects.create_superuser(
@@ -73,6 +94,7 @@ class SubjectiveExamWorkflowTests(APITestCase):
             exam_type='subjective',
             category=self.category,
             exam=self.exam,
+            course=self.course,
             time_limit=90, # 90 minutes writing time
             total_marks=100,
             passing_marks=40,
@@ -82,6 +104,13 @@ class SubjectiveExamWorkflowTests(APITestCase):
             status='published',
             created_by=self.admin,
         )
+
+        # Attach valid question paper PDF so exam meets publishing and start requirements
+        pdf_content = create_dummy_pdf(num_pages=2)
+        self.subjective_exam.question_paper_pdf.save("officer_qp.pdf", io.BytesIO(pdf_content))
+        self.subjective_exam.question_paper_page_count = 2
+        self.subjective_exam.question_paper_file_size = len(pdf_content)
+        self.subjective_exam.save()
 
         # Approved ExaminationRequest for subjective attempt
         ExaminationRequest.objects.create(

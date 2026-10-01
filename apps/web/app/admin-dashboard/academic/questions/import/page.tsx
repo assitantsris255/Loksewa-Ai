@@ -14,10 +14,7 @@ const MISSING_LABELS: Record<string, string> = {
   options: 'Options A–D',
   correct_answer: 'Correct answer',
   explanation: 'Explanation',
-  model_answer: 'Model answer',
 };
-
-type ImportQuestionType = 'mcq' | 'true_false' | 'subjective';
 
 interface Column {
   header: string;        // Excel header / preview column title
@@ -25,70 +22,23 @@ interface Column {
   required: boolean;
 }
 
-// The upload instructions, template name and preview columns are all driven
-// from the selected Question Type - nothing MCQ-shaped is shown for a
-// subjective import (and vice versa). Mirrors the backend contract in
-// administration/import_views.py, which remains the authority.
-const TYPE_CONFIG: Record<ImportQuestionType, {
-  label: string;
-  family: 'Objective' | 'Subjective';
-  templateFile: string;
-  columns: Column[];
-  notes: string[];
-}> = {
-  mcq: {
-    label: 'Objective / MCQ',
-    family: 'Objective',
-    templateFile: 'Objective Question Template.xlsx',
-    columns: [
-      { header: 'SN', key: 'sn', required: false },
-      { header: 'Questions', key: 'question', required: true },
-      { header: 'Mark', key: 'marks', required: true },
-      { header: 'Option A', key: 'option_a', required: true },
-      { header: 'Option B', key: 'option_b', required: true },
-      { header: 'Option C', key: 'option_c', required: true },
-      { header: 'Option D', key: 'option_d', required: true },
-      { header: 'Correct Answer', key: 'correct_answer', required: true },
-      { header: 'Explanation', key: 'explanation', required: false },
-      { header: 'Hint', key: 'hint', required: false },
-    ],
-    notes: [
-      'Correct Answer: write A, B, C or D (the numbers 1, 2, 3, 4 also work).',
-      'Leave Explanation or Hint blank and the AI can fill Explanation in on the next step.',
-    ],
-  },
-  true_false: {
-    label: 'Objective / True-False',
-    family: 'Objective',
-    templateFile: 'True-False Question Template.xlsx',
-    columns: [
-      { header: 'SN', key: 'sn', required: false },
-      { header: 'Questions', key: 'question', required: true },
-      { header: 'Mark', key: 'marks', required: true },
-      { header: 'Correct Answer', key: 'correct_answer', required: true },
-      { header: 'Explanation', key: 'explanation', required: false },
-      { header: 'Hint', key: 'hint', required: false },
-    ],
-    notes: ['Correct Answer: A for True, B for False (1 or 2 also work).'],
-  },
-  subjective: {
-    label: 'Subjective',
-    family: 'Subjective',
-    templateFile: 'Subjective Question Template.xlsx',
-    columns: [
-      { header: 'SN', key: 'sn', required: false },
-      { header: 'Questions', key: 'question', required: true },
-      { header: 'Mark', key: 'marks', required: true },
-      { header: 'Model Answer', key: 'model_answer', required: true },
-      { header: 'Explanation', key: 'explanation', required: false },
-      { header: 'Hint', key: 'hint', required: false },
-    ],
-    notes: [
-      'Model Answer is the reference answer evaluators mark against - it is required.',
-      'Subjective questions have no answer options, so this template has no option columns.',
-    ],
-  },
-};
+const OBJECTIVE_COLUMNS: Column[] = [
+  { header: 'SN', key: 'sn', required: false },
+  { header: 'Questions', key: 'question', required: true },
+  { header: 'Mark', key: 'marks', required: true },
+  { header: 'Option A', key: 'option_a', required: true },
+  { header: 'Option B', key: 'option_b', required: true },
+  { header: 'Option C', key: 'option_c', required: true },
+  { header: 'Option D', key: 'option_d', required: true },
+  { header: 'Correct Answer', key: 'correct_answer', required: true },
+  { header: 'Explanation', key: 'explanation', required: false },
+  { header: 'Hint', key: 'hint', required: false },
+];
+
+const OBJECTIVE_NOTES = [
+  'Correct Answer: write A, B, C or D (the numbers 1, 2, 3, 4 also work).',
+  'Leave Explanation or Hint blank and the AI can fill Explanation in on the next step.',
+];
 
 export default function ImportQuestionsPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -98,20 +48,14 @@ export default function ImportQuestionsPage() {
   const [importedCount, setImportedCount] = useState(0);
   const [skippedDuplicates, setSkippedDuplicates] = useState(0);
 
-  // Syllabus placement and defaults, chosen here rather than per CSV row.
+  // Syllabus placement: Category and Position/Level required, Subject/Chapter/Topic optional
   const [category, setCategory] = useState<number | undefined>();
   const [position, setPosition] = useState<number | undefined>();
   const [subject, setSubject] = useState<number | undefined>();
   const [chapter, setChapter] = useState<number | undefined>();
   const [topic, setTopic] = useState<number | undefined>();
-  const [questionType, setQuestionType] = useState<ImportQuestionType>('mcq');
-  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
-  const cfg = TYPE_CONFIG[questionType];
-  const isSubjective = questionType === 'subjective';
 
-  // Collection & Tags (Optional) - if set, every successfully imported
-  // question is added to the Collection and/or receives the Tags. Neither
-  // is required; approval status is unaffected either way.
+  // Collection & Tags (Optional)
   const [collections, setCollections] = useState<QuestionCollection[]>([]);
   const [collectionId, setCollectionId] = useState<number | undefined>();
   const [tags, setTags] = useState<AdminTag[]>([]);
@@ -146,14 +90,14 @@ export default function ImportQuestionsPage() {
 
   const downloadTemplate = async () => {
     try {
-      await adminQuestionApi.downloadTemplate(questionType);
+      await adminQuestionApi.downloadTemplate('mcq');
     } catch (error: any) {
       toast.error(error.message || 'Failed to download template');
     }
   };
 
   const handleUpload = async () => {
-    if (!file || !topic) return;
+    if (!file || !category || !position) return;
     const lower = file.name.toLowerCase();
     if (!(lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv'))) {
       toast.error('Please choose an Excel (.xlsx) or CSV file.');
@@ -162,9 +106,11 @@ export default function ImportQuestionsPage() {
     setBusy(true);
     try {
       const res = await adminQuestionApi.uploadCSV(file, {
+        category,
+        position,
+        subject,
+        chapter,
         topic,
-        question_type: questionType,
-        difficulty,
         collection_id: collectionId,
         tag_ids: selectedTagIds,
       });
@@ -238,9 +184,9 @@ export default function ImportQuestionsPage() {
           <ArrowLeft className="w-5 h-5 text-gray-500" />
         </Link>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Import Excel</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Import Objective Questions</h1>
           <p className="text-gray-500 mt-1">
-            Choose where the questions belong, then upload an Excel (.xlsx) file of question content.
+            Choose where the questions belong, then upload an Excel (.xlsx) or CSV file of objective question content.
           </p>
         </div>
       </div>
@@ -272,7 +218,7 @@ export default function ImportQuestionsPage() {
           <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
             <h2 className="text-lg font-semibold text-gray-900 mb-1">Where do these questions belong?</h2>
             <p className="text-sm text-gray-500 mb-6">
-              These settings apply to every row in the file, so the CSV only needs the question content itself.
+              Category and Position/Level are required. Subject, Chapter, and Topic are optional.
             </p>
 
             <AcademicDependentSelect
@@ -282,36 +228,10 @@ export default function ImportQuestionsPage() {
               chapter={chapter}
               topic={topic}
               onChange={handleAcademicChange}
+              requiredLevels={['category', 'position']}
               maxLevel="topic"
               layout="grid"
             />
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 pt-6 border-t border-gray-100">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Question Type</label>
-                <select
-                  value={questionType}
-                  onChange={(e) => setQuestionType(e.target.value as any)}
-                  className="w-full p-2.5 border border-gray-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0B2545]/20"
-                >
-                  <option value="mcq">Objective — Multiple Choice (MCQ)</option>
-                  <option value="true_false">Objective — True / False</option>
-                  <option value="subjective">Subjective (written answer)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Difficulty</label>
-                <select
-                  value={difficulty}
-                  onChange={(e) => setDifficulty(e.target.value as any)}
-                  className="w-full p-2.5 border border-gray-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0B2545]/20"
-                >
-                  <option value="easy">Easy</option>
-                  <option value="medium">Medium</option>
-                  <option value="hard">Hard</option>
-                </select>
-              </div>
-            </div>
           </div>
 
           <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
@@ -360,12 +280,9 @@ export default function ImportQuestionsPage() {
               <div className="bg-blue-50 w-16 h-16 rounded-full flex items-center justify-center mb-6">
                 <UploadCloud className="w-8 h-8 text-blue-600" />
               </div>
-              <h2 className="text-xl font-bold text-gray-900 mb-1">Upload Excel File</h2>
-              <p className="text-sm font-semibold text-[#0B2545] mb-3" data-testid="import-type-label">
-                Question Type: {cfg.label}
-              </p>
+              <h2 className="text-xl font-bold text-gray-900 mb-1">Upload File</h2>
               <div className="flex flex-wrap justify-center gap-1.5 mb-3" data-testid="import-columns">
-                {cfg.columns.map((c) => (
+                {OBJECTIVE_COLUMNS.map((c) => (
                   <span
                     key={c.header}
                     className={`text-xs px-2 py-1 rounded border ${c.required ? 'bg-blue-50 border-blue-200 text-blue-800 font-semibold' : 'bg-gray-50 border-gray-200 text-gray-600'}`}
@@ -377,7 +294,7 @@ export default function ImportQuestionsPage() {
               <p className="text-gray-500 text-center mb-2 text-sm">
                 Columns marked * are required. SN is only the row number shown in the review — it is not the question&apos;s ID.
               </p>
-              {cfg.notes.map((n) => (
+              {OBJECTIVE_NOTES.map((n) => (
                 <p key={n} className="text-gray-500 text-center mb-2 text-sm">{n}</p>
               ))}
 
@@ -385,7 +302,7 @@ export default function ImportQuestionsPage() {
                 onClick={downloadTemplate}
                 className="text-[#0B2545] font-medium hover:underline flex items-center gap-2 mt-4 mb-8"
               >
-                <FileText className="w-4 h-4" /> Download {cfg.templateFile}
+                <FileText className="w-4 h-4" /> Download Objective Question Template.xlsx
               </button>
 
               <div className="w-full border-2 border-dashed border-gray-300 rounded-xl p-8 hover:bg-gray-50 transition-colors text-center relative">
@@ -398,7 +315,7 @@ export default function ImportQuestionsPage() {
                 {!file ? (
                   <div>
                     <p className="font-medium text-gray-700">Click to browse or drag and drop</p>
-                    <p className="text-sm text-gray-500 mt-1">.xlsx format (legacy .csv also supported)</p>
+                    <p className="text-sm text-gray-500 mt-1">.xlsx or .csv format</p>
                   </div>
                 ) : (
                   <div className="flex items-center justify-center gap-3">
@@ -408,14 +325,14 @@ export default function ImportQuestionsPage() {
                 )}
               </div>
 
-              {!topic && (
+              {(!category || !position) && (
                 <p className="text-sm text-amber-600 mt-4 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4" /> Select a topic above before analyzing.
+                  <AlertCircle className="w-4 h-4" /> Select Category and Position / Level above before analyzing.
                 </p>
               )}
 
               <button
-                disabled={!file || !topic || busy}
+                disabled={!file || !category || !position || busy}
                 onClick={handleUpload}
                 aria-busy={busy}
                 className="w-full mt-6 bg-[#0B2545] hover:bg-[#163E6C] disabled:opacity-50 disabled:cursor-not-allowed text-white py-3 rounded-xl font-medium flex items-center justify-center gap-2 shadow-sm transition-all"
@@ -459,7 +376,7 @@ export default function ImportQuestionsPage() {
             </div>
           </div>
 
-          {report.incomplete_rows > 0 && !isSubjective && (
+          {report.incomplete_rows > 0 && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-start gap-3">
                 <Sparkles className="w-5 h-5 text-blue-600 mt-0.5" />
@@ -485,7 +402,7 @@ export default function ImportQuestionsPage() {
 
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
             <div className="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
-              <h3 className="font-bold text-gray-900">Preview — {cfg.label}</h3>
+              <h3 className="font-bold text-gray-900">Preview — Objective Questions</h3>
               <p className="text-sm text-gray-500">{report.total_rows} row{report.total_rows === 1 ? '' : 's'}</p>
             </div>
             <div className="overflow-x-auto max-h-[360px] overflow-y-auto">
@@ -494,7 +411,7 @@ export default function ImportQuestionsPage() {
                   <tr>
                     <th className="px-3 py-2 text-left font-semibold text-gray-600">Row</th>
                     <th className="px-3 py-2 text-left font-semibold text-gray-600">Status</th>
-                    {cfg.columns.filter((c) => c.key !== 'sn').map((c) => (
+                    {OBJECTIVE_COLUMNS.filter((c) => c.key !== 'sn').map((c) => (
                       <th key={c.key} className="px-3 py-2 text-left font-semibold text-gray-600 whitespace-nowrap">{c.header}</th>
                     ))}
                   </tr>
@@ -512,7 +429,7 @@ export default function ImportQuestionsPage() {
                           {row.status === 'valid' ? 'Ready' : row.status === 'incomplete' ? 'Needs info' : row.status === 'duplicate' ? 'Duplicate' : 'Error'}
                         </span>
                       </td>
-                      {cfg.columns.filter((c) => c.key !== 'sn').map((c) => (
+                      {OBJECTIVE_COLUMNS.filter((c) => c.key !== 'sn').map((c) => (
                         <td key={c.key} className="px-3 py-2 max-w-[260px] truncate text-gray-800" title={row.data[c.key] || ''}>
                           {row.data[c.key] || <span className="text-gray-300">—</span>}
                         </td>
@@ -613,7 +530,7 @@ export default function ImportQuestionsPage() {
           </div>
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Import Successful</h2>
           <p className="text-gray-500 mb-8 max-w-md mx-auto">
-            {importedCount} {cfg.family.toLowerCase()} question{importedCount === 1 ? '' : 's'} were added to the Question Bank and
+            {importedCount} objective question{importedCount === 1 ? '' : 's'} were added to the Objective Question Bank and
             assigned unique IDs.
             {skippedDuplicates > 0 && ` ${skippedDuplicates} row${skippedDuplicates === 1 ? ' was' : 's were'} skipped because the question already exists.`}
           </p>
@@ -622,7 +539,7 @@ export default function ImportQuestionsPage() {
               href="/admin-dashboard/academic/questions"
               className="px-6 py-3 font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
             >
-              Back to Question Bank
+              Back to Objective Question Bank
             </Link>
             <button
               onClick={resetAll}

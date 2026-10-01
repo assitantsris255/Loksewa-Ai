@@ -70,6 +70,10 @@ class StudentExaminationSerializer(serializers.ModelSerializer):
     can_start = serializers.SerializerMethodField()
     start_blocked_reason = serializers.SerializerMethodField()
     has_question_paper = serializers.SerializerMethodField()
+    latest_attempt_id = serializers.SerializerMethodField()
+    latest_attempt_status = serializers.SerializerMethodField()
+    is_result_published = serializers.SerializerMethodField()
+    requires_admin_request = serializers.SerializerMethodField()
 
     # The raw admin-set category, plus effective_category which auto-promotes
     # a Live Exam into the Model Exams listing 48h after its scheduled start
@@ -87,7 +91,9 @@ class StudentExaminationSerializer(serializers.ModelSerializer):
             'negative_marking_value', 'max_attempts', 'allow_resume',
             'auto_submit', 'start_time', 'end_time', 'status',
             'has_attempted', 'attempts_used', 'attempts_remaining',
-            'active_attempt_id', 'can_start', 'start_blocked_reason',
+            'active_attempt_id', 'latest_attempt_id', 'latest_attempt_status',
+            'is_result_published', 'requires_admin_request',
+            'can_start', 'start_blocked_reason',
             'has_question_paper', 'question_paper_page_count',
             'upload_deadline_minutes', 'answer_upload_enabled',
             'allowed_file_types', 'max_upload_size_mb', 'evaluation_type',
@@ -112,9 +118,13 @@ class StudentExaminationSerializer(serializers.ModelSerializer):
     def _active_attempt(self, obj):
         attempts = self._attempts(obj)
         for att in attempts:
-            if att.status == 'in-progress':
+            if att.status in ('in-progress', 'upload_pending'):
                 return att
         return None
+
+    def _latest_attempt(self, obj):
+        attempts = self._attempts(obj)
+        return attempts[0] if attempts else None
 
     # -- fields ------------------------------------------------------------
     def get_has_attempted(self, obj):
@@ -132,6 +142,32 @@ class StudentExaminationSerializer(serializers.ModelSerializer):
         active = self._active_attempt(obj)
         return active.id if active else None
 
+    def get_latest_attempt_id(self, obj):
+        latest = self._latest_attempt(obj)
+        return latest.id if latest else None
+
+    def get_latest_attempt_status(self, obj):
+        latest = self._latest_attempt(obj)
+        return latest.status if latest else None
+
+    def get_is_result_published(self, obj):
+        latest = self._latest_attempt(obj)
+        if not latest:
+            return False
+        if obj.exam_type == 'subjective':
+            sub = getattr(latest, 'subjective_submission', None)
+            return bool(sub and sub.is_published)
+        return latest.status == 'evaluated' or (latest.status == 'submitted' and obj.result_visibility == 'immediate')
+
+    def get_requires_admin_request(self, obj):
+        return bool(
+            obj.course_id is not None
+            and (
+                obj.objective_category in ('past_year', 'model', 'topicwise')
+                or (obj.exam_type == 'subject' and obj.topic_id is not None)
+            )
+        )
+
     def get_can_start(self, obj):
         return self.get_start_blocked_reason(obj) is None
 
@@ -148,9 +184,25 @@ class StudentExaminationSerializer(serializers.ModelSerializer):
         if obj.end_time and now > obj.end_time:
             return 'This exam window has closed.'
 
+        # Subjective exam must have a valid question paper attached
+        if obj.exam_type == 'subjective' and not obj.question_paper_pdf:
+            return 'Subjective question paper is not available yet.'
+
         # A resumable attempt always wins over the attempt cap.
         if self._active_attempt(obj):
             return None
+
+        # Check request requirement if applicable
+        if self.get_requires_admin_request(obj):
+            req = ExaminationRequest.objects.filter(
+                student=user, examination=obj
+            ).order_by('-created_at').first()
+            if not req:
+                return 'Admin approval is required before starting this examination.'
+            if req.status == 'pending':
+                return 'Waiting for Admin approval.'
+            if req.status == 'rejected':
+                return f'Request Rejected: {req.rejection_reason}' if req.rejection_reason else 'Request Rejected by Admin.'
 
         remaining = self.get_attempts_remaining(obj)
         if remaining is not None and remaining <= 0:

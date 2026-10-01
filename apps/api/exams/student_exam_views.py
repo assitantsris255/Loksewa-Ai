@@ -121,6 +121,11 @@ class StudentExaminationViewSet(viewsets.ReadOnlyModelViewSet):
                 )
             )
 
+        # Exclude subjective exams that do not have an assigned question paper PDF
+        base_qs = base_qs.exclude(
+            Q(exam_type='subjective') & (Q(question_paper_pdf__isnull=True) | Q(question_paper_pdf=''))
+        )
+
         if self.action == 'list':
             base_qs = base_qs.exclude(exam_type='custom').exclude(objective_category='custom')
             if self.request.query_params.get('topicwise', '').lower() in ('1', 'true', 'yes'):
@@ -268,13 +273,19 @@ class StudentExaminationViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if examination.exam_type == 'subjective' and not examination.question_paper_pdf:
+            return Response(
+                {'detail': 'Question paper for this subjective exam is not available yet.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         with transaction.atomic():
             # Lock this student's rows for this exam so two tabs racing on
             # "Start" cannot both create an attempt.
             active_attempt = (
                 ExaminationAttempt.objects
                 .select_for_update()
-                .filter(examination=examination, student=user, status='in-progress')
+                .filter(examination=examination, student=user, status__in=('in-progress', 'upload_pending'))
                 .first()
             )
 
@@ -336,7 +347,7 @@ class StudentExaminationViewSet(viewsets.ReadOnlyModelViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
         attempt = ExaminationAttempt.objects.filter(
-            examination=examination, student=request.user, status='in-progress'
+            examination=examination, student=request.user, status__in=('in-progress', 'upload_pending')
         ).first()
 
         if attempt and enforce_expiry(attempt):

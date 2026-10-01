@@ -59,10 +59,19 @@ class SubjectiveExamAssignmentService:
             eligible_sets = SubjectiveExamAssignmentService.get_eligible_question_sets(locked_request)
             if question_set_id is not None:
                 eligible_sets = eligible_sets.filter(pk=question_set_id)
+            elif mode == 'auto':
+                eligible_sets = eligible_sets.order_by('?')
 
             selected_set = eligible_sets.first()
             if not selected_set:
                 return None
+
+            file_size = 0
+            if selected_set.pdf_file:
+                try:
+                    file_size = selected_set.pdf_file.size
+                except Exception:
+                    file_size = 0
 
             exam = Examination.objects.create(
                 title=selected_set.title,
@@ -84,7 +93,7 @@ class SubjectiveExamAssignmentService:
                 status='published',
                 question_paper_pdf=selected_set.pdf_file,
                 question_paper_page_count=1,
-                question_paper_file_size=selected_set.pdf_file.size if selected_set.pdf_file else 0,
+                question_paper_file_size=file_size,
                 created_by=selected_set.created_by,
             )
 

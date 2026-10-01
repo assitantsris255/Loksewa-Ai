@@ -179,16 +179,27 @@ class QuestionAcademicHierarchyTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('subject', response.data)
 
-    def test_missing_subject_rejected(self):
-        """New question without subject must be rejected."""
+    def test_question_without_subject_is_valid(self):
+        """New question with Category and Position but without Subject is valid and saves."""
         data = {
-            'question_type': 'mcq',
             'status': 'draft',
-            'difficulty': 'medium',
-            'text': 'No subject test question?',
+            'category': self.cat1.id,
+            'position': self.level1.id,
+            'subject': None,
+            'chapter': None,
+            'topic': None,
+            'text': 'Broad question without specific subject?',
             'option_a': 'A', 'option_b': 'B', 'option_c': 'C', 'option_d': 'D',
             'correct_option': 'A',
         }
         response = self.client.post('/api/admin/questions/', data, format='json')
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('subject', response.data)
+        self.assertEqual(response.status_code, 201, response.data)
+        q = Question.objects.get(id=response.data['id'])
+        self.assertIsNone(q.subject)
+        self.assertIsNone(q.chapter)
+        self.assertIsNone(q.topic)
+        self.assertEqual(q.exam_id, self.level1.id)
+        self.assertEqual(q.category_id, self.cat1.id)
+        self.assertEqual(response.data['position_name'], '5th Level')
+        self.assertEqual(response.data['category_name'], 'PSC Exams')
+        self.assertIsNone(response.data['subject_name'])

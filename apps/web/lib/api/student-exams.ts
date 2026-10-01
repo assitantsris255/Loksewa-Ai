@@ -38,6 +38,12 @@ export interface StudentExam {
   attempts_used?: number;
   attempts_remaining?: number | null;
   active_attempt_id?: number | null;
+  latest_attempt_id?: number | null;
+  latest_attempt_status?: string | null;
+  is_result_published?: boolean;
+  requires_admin_request?: boolean;
+  has_question_paper?: boolean;
+  question_paper_page_count?: number;
   can_start?: boolean;
   start_blocked_reason?: string | null;
 }

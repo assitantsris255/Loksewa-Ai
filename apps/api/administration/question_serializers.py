@@ -13,10 +13,10 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
         queryset=Topic.objects.all(), required=False, allow_null=True
     )
     category = serializers.PrimaryKeyRelatedField(
-        queryset=ExamCategory.objects.all(), required=False, write_only=True
+        queryset=ExamCategory.objects.all(), required=False, allow_null=True
     )
     position = serializers.PrimaryKeyRelatedField(
-        queryset=Exam.objects.all(), required=False, write_only=True
+        queryset=Exam.objects.all(), required=False, allow_null=True, source='exam'
     )
 
     collections = serializers.SerializerMethodField()
@@ -87,6 +87,8 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
 
     def _question_exam(self, obj):
         try:
+            if getattr(obj, 'exam_id', None) and obj.exam:
+                return obj.exam
             subject = (
                 obj.subject or
                 (obj.chapter.subject if obj.chapter else None) or
@@ -100,6 +102,8 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
 
     def get_position_name(self, obj):
         try:
+            if getattr(obj, 'exam_id', None) and obj.exam:
+                return obj.exam.name
             exam = self._question_exam(obj)
             return exam.name if exam else None
         except:
@@ -107,6 +111,10 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
 
     def get_category_name(self, obj):
         try:
+            if getattr(obj, 'category_id', None) and obj.category:
+                return obj.category.name
+            if getattr(obj, 'exam_id', None) and obj.exam and obj.exam.category:
+                return obj.exam.category.name
             exam = self._question_exam(obj)
             return exam.category.name if exam and exam.category_id else None
         except:
@@ -132,6 +140,8 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
             
     def get_position_id(self, obj):
         try:
+            if getattr(obj, 'exam_id', None):
+                return obj.exam_id
             exam = self._question_exam(obj)
             return exam.id if exam else None
         except:
@@ -139,6 +149,10 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
             
     def get_category_id(self, obj):
         try:
+            if getattr(obj, 'category_id', None):
+                return obj.category_id
+            if getattr(obj, 'exam_id', None) and obj.exam and obj.exam.category_id:
+                return obj.exam.category_id
             exam = self._question_exam(obj)
             return exam.category_id if exam and exam.category_id else None
         except:
@@ -163,13 +177,14 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
     def validate(self, data):
         """
         Validate question rules based on type and academic hierarchy.
+        Subject is optional; Category and Position/Level are accepted and auto-inferred.
         """
         # Academic hierarchy validation
         subject = data.get('subject') or (self.instance.subject if self.instance else None)
         chapter = data.get('chapter') if 'chapter' in data else (self.instance.chapter if self.instance else None)
         topic = data.get('topic') if 'topic' in data else (self.instance.topic if self.instance else None)
-        category = data.get('category')
-        position = data.get('position')
+        position = data.get('exam') or (self.instance.exam if self.instance else None)
+        category = data.get('category') or (self.instance.category if self.instance else None)
 
         # Auto-infer parents from topic/chapter if needed
         if topic:
@@ -184,8 +199,17 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
             subject = chapter.subject
             data['subject'] = subject
 
-        if not subject and not self.instance:
-            raise serializers.ValidationError({"subject": "Subject is required."})
+        if subject:
+            if not position and subject.paper and subject.paper.exam:
+                position = subject.paper.exam
+                data['exam'] = position
+            if not category and position and position.category:
+                category = position.category
+                data['category'] = category
+
+        if position and not category and position.category:
+            category = position.category
+            data['category'] = category
 
         # 1. Topic must belong to Chapter if both are present
         if topic and chapter and topic.chapter_id != chapter.id:
@@ -219,7 +243,7 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
                 })
 
         # Type-specific validation
-        q_type = data.get('question_type') or (self.instance.question_type if self.instance else None)
+        q_type = data.get('question_type') or (self.instance.question_type if self.instance else 'mcq')
 
         if q_type == 'mcq':
             if not data.get('option_a') or not data.get('option_b') or not data.get('option_c') or not data.get('option_d'):
@@ -234,13 +258,3 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Subjective-type questions require a model answer.")
 
         return data
-
-    def create(self, validated_data):
-        validated_data.pop('category', None)
-        validated_data.pop('position', None)
-        return super().create(validated_data)
-
-    def update(self, instance, validated_data):
-        validated_data.pop('category', None)
-        validated_data.pop('position', None)
-        return super().update(instance, validated_data)

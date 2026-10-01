@@ -228,8 +228,8 @@ export default function QuestionBankPage() {
     <div className="p-5 md:p-6 space-y-6 max-w-[1600px] mx-auto">
       <div className="flex flex-wrap justify-between items-start gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Question Bank</h1>
-          <p className="text-gray-500 mt-1">Manage unified questions across the entire platform.</p>
+          <h1 className="text-2xl font-bold text-gray-900">Objective Question Bank</h1>
+          <p className="text-gray-500 mt-1">Manage individual objective and MCQ questions across the platform.</p>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
           <Link
@@ -238,13 +238,6 @@ export default function QuestionBankPage() {
           >
             <Upload className="w-4 h-4" />
             Import Excel
-          </Link>
-          <Link
-            href="/admin-dashboard/exams/subjective-generator"
-            className="bg-white border border-indigo-200 text-indigo-800 hover:bg-indigo-50 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium text-sm whitespace-nowrap"
-          >
-            <Wand2 className="w-4 h-4" />
-            Generate Subjective Live Exam
           </Link>
           <Link
             href="/admin-dashboard/academic/questions/create"
@@ -258,7 +251,7 @@ export default function QuestionBankPage() {
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-500">Total Questions</p>
@@ -275,15 +268,6 @@ export default function QuestionBankPage() {
             </div>
             <div className="p-3 bg-green-50 rounded-lg">
               <CheckSquare className="w-6 h-6 text-green-600" />
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-500">Subjective Questions</p>
-              <p className="text-3xl font-bold text-gray-900 mt-1">{stats.subjective}</p>
-            </div>
-            <div className="p-3 bg-purple-50 rounded-lg">
-              <FileText className="w-6 h-6 text-purple-600" />
             </div>
           </div>
           <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between">
@@ -354,7 +338,6 @@ export default function QuestionBankPage() {
           >
             <option value="">All Types</option>
             <option value="mcq">MCQ</option>
-            <option value="subjective">Subjective</option>
             <option value="true_false">True / False</option>
           </select>
           <select

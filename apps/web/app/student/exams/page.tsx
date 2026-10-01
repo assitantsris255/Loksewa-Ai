@@ -58,6 +58,7 @@ export default function ExamsListingPage() {
   const modelExams = activeExams.filter(e => e.effective_category === "model");
   const liveExams = activeExams.filter(e => e.effective_category === "live");
   const topicwiseExams = activeExams.filter(e => e.effective_category === "topicwise" || (e.exam_type === "subject" && !!e.topic_id));
+  const subjectiveExams = activeExams.filter(e => e.exam_type === "subjective");
 
   const ExamGrid = ({ list, emptyTitle, emptyBody }: { list: StudentExam[]; emptyTitle: string; emptyBody: string }) => {
     if (isLoadingExams && !exams) {
@@ -84,14 +85,18 @@ export default function ExamsListingPage() {
           <Card key={exam.id} className="border-border/60 flex flex-col hover:border-primary/30 transition-colors">
             <CardHeader>
               <div className="flex justify-between items-start mb-2">
-                <Badge variant={exam.exam_type === "mock" ? "default" : "secondary"}>
+                <Badge variant={exam.exam_type === "subjective" ? "default" : exam.exam_type === "mock" ? "default" : "secondary"}>
                   {exam.exam_type.toUpperCase()}
                 </Badge>
-                {exam.has_attempted && (
+                {exam.active_attempt_id ? (
+                  <Badge variant="outline" className="text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/30">
+                    In Progress
+                  </Badge>
+                ) : exam.has_attempted ? (
                   <Badge variant="outline" className="text-primary border-primary/30">
                     Attempted
                   </Badge>
-                )}
+                ) : null}
               </div>
               <CardTitle className="text-xl line-clamp-2">{exam.title}</CardTitle>
               <CardDescription className="text-primary font-medium mt-1">
@@ -100,13 +105,25 @@ export default function ExamsListingPage() {
             </CardHeader>
             <CardContent className="flex-1">
               <div className="flex items-center justify-between text-sm text-muted-foreground bg-muted/30 p-3 rounded-lg">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <Clock className="h-4 w-4" />
                   <span>{exam.time_limit} min</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Target className="h-4 w-4" />
-                  <span>{exam.total_questions} Qs</span>
+                <div className="flex items-center gap-1.5">
+                  {exam.exam_type === "subjective" ? (
+                    <>
+                      <FileText className="h-4 w-4 text-primary" />
+                      <span>{exam.question_paper_page_count ? `${exam.question_paper_page_count} Pages` : "PDF Paper"}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Target className="h-4 w-4" />
+                      <span>{exam.total_questions} Qs</span>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 font-medium text-foreground">
+                  <span>{exam.total_marks} Marks</span>
                 </div>
               </div>
             </CardContent>
@@ -116,10 +133,15 @@ export default function ExamsListingPage() {
                   className="w-full gap-2"
                   variant={exam.has_attempted ? "secondary" : "default"}
                 >
-                  {exam.has_attempted ? (
+                  {exam.active_attempt_id ? (
+                    <>
+                      <Play className="h-4 w-4 fill-current text-amber-500" />
+                      Resume Exam
+                    </>
+                  ) : exam.has_attempted ? (
                     <>
                       <CheckCircle className="h-4 w-4 text-emerald-500" />
-                      Already Taken — Details
+                      {exam.is_result_published ? "View Result" : "Already Taken — Details"}
                     </>
                   ) : (
                     <>
@@ -163,6 +185,7 @@ export default function ExamsListingPage() {
           <TabsTrigger value="model">Model Exams</TabsTrigger>
           <TabsTrigger value="live">Live Exams</TabsTrigger>
           <TabsTrigger value="topicwise">Topicwise Exam</TabsTrigger>
+          <TabsTrigger value="subjective">Subjective Papers</TabsTrigger>
         </TabsList>
 
         <TabsContent value="past_year" className="space-y-6">
@@ -194,6 +217,14 @@ export default function ExamsListingPage() {
             list={topicwiseExams}
             emptyTitle="No Topicwise Exams"
             emptyBody="Published topic-focused examinations will appear here."
+          />
+        </TabsContent>
+
+        <TabsContent value="subjective" className="space-y-6">
+          <ExamGrid
+            list={subjectiveExams}
+            emptyTitle="No Subjective Exams"
+            emptyBody="Published subjective question papers will show up here once published by the Admin."
           />
         </TabsContent>
 

@@ -155,6 +155,8 @@ class Question(models.Model):
         ('hard', 'Hard'),
     )
     question_id = models.CharField(max_length=20, unique=True, blank=True, null=True, help_text="Permanent unique ID (e.g., Q-000001)")
+    category = models.ForeignKey('exams.ExamCategory', on_delete=models.SET_NULL, null=True, blank=True, related_name='questions', help_text="Academic Category")
+    exam = models.ForeignKey('exams.Exam', on_delete=models.SET_NULL, null=True, blank=True, related_name='questions', help_text="Level / Position")
     subject = models.ForeignKey('exams.Subject', on_delete=models.CASCADE, null=True, blank=True, related_name='questions')
     chapter = models.ForeignKey('exams.Chapter', on_delete=models.SET_NULL, null=True, blank=True, related_name='questions')
     topic = models.ForeignKey(Topic, on_delete=models.SET_NULL, null=True, blank=True, related_name='questions')
@@ -180,7 +182,7 @@ class Question(models.Model):
     expected_time_minutes = models.IntegerField(default=1)
     explanation = models.TextField(blank=True)
     hint = models.TextField(blank=True, help_text="Optional hint shown to help the student answer")
-    difficulty = models.CharField(max_length=10, choices=DIFFICULTY_CHOICES, default='medium')
+    difficulty = models.CharField(max_length=10, choices=DIFFICULTY_CHOICES, default='medium', blank=True, null=True)
     # AI Fields
     ai_generate_options = models.BooleanField(default=False)
     ai_status = models.CharField(
@@ -240,6 +242,20 @@ class Question(models.Model):
         elif self.topic_id and not self.subject_id:
             try:
                 self.subject_id = self.topic.chapter.subject_id
+            except Exception:
+                pass
+
+        if self.subject_id and not self.exam_id:
+            try:
+                if self.subject.paper and self.subject.paper.exam:
+                    self.exam_id = self.subject.paper.exam_id
+            except Exception:
+                pass
+
+        if self.exam_id and not self.category_id:
+            try:
+                if self.exam.category_id:
+                    self.category_id = self.exam.category_id
             except Exception:
                 pass
 

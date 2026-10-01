@@ -82,7 +82,8 @@ const SIDEBAR_NAV: NavSection[] = [
     title: "Academic",
     items: [
       { title: "Academic Management", href: "/admin-dashboard/academic", icon: GraduationCap as any },
-      { title: "Question Bank", href: "/admin-dashboard/academic/questions", icon: BookOpen as any },
+      { title: "Objective Question Bank", href: "/admin-dashboard/academic/questions", icon: BookOpen as any },
+      { title: "Subjective Question Bank", href: "/admin-dashboard/academic/subjective-sets", icon: FileText as any },
       { title: "Review Queue", href: "/admin-dashboard/questions/review", icon: ClipboardCheck },
       { title: "Collections", href: "/admin-dashboard/academic/collections", icon: ListTodo },
       { title: "Question Sets", href: "/admin-dashboard/academic/question-sets", icon: Layers },

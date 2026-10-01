@@ -44,11 +44,10 @@ export default function ExamDetailsPage() {
     queryFn: () => studentExamsApi.getExamDetails(examId)
   });
 
-  const requiresAdminRequest = !!exam && (
-    exam.objective_category === "past_year" ||
-    exam.objective_category === "model" ||
-    exam.exam_type === "subjective" ||
-    (exam.exam_type === "subject" && !!exam.topic_id)
+  const requiresAdminRequest = Boolean(
+    exam &&
+    exam.requires_admin_request &&
+    !exam.can_start
   );
   const { data: examRequests = [], isLoading: isLoadingRequests, refetch: refetchRequests } = useQuery({
     queryKey: ["student-exam-requests"],
@@ -141,8 +140,8 @@ export default function ExamDetailsPage() {
       <Card className="border-border/60 shadow-sm">
         <CardHeader className="pb-4">
           <div className="flex justify-between items-start mb-2">
-            <Badge variant={exam.topic_id ? "default" : exam.exam_type === "mock" ? "default" : "secondary"}>
-              {exam.topic_id ? "TOPICWISE TEST" : exam.exam_type.toUpperCase()}
+            <Badge variant={exam.exam_type === "subjective" ? "default" : exam.topic_id ? "default" : exam.exam_type === "mock" ? "default" : "secondary"}>
+              {exam.exam_type === "subjective" ? "SUBJECTIVE" : exam.topic_id ? "TOPICWISE TEST" : exam.exam_type.toUpperCase()}
             </Badge>
           </div>
           <CardTitle className="text-2xl md:text-3xl">{exam.title}</CardTitle>
@@ -160,9 +159,23 @@ export default function ExamDetailsPage() {
             </div>
             <div className="flex flex-col gap-1">
               <span className="text-muted-foreground text-sm flex items-center gap-1">
-                <Target className="h-3.5 w-3.5" /> Questions
+                {exam.exam_type === "subjective" ? (
+                  <>
+                    <FileText className="h-3.5 w-3.5" /> Paper
+                  </>
+                ) : (
+                  <>
+                    <Target className="h-3.5 w-3.5" /> Questions
+                  </>
+                )}
               </span>
-              <span className="font-medium text-lg">{exam.total_questions}</span>
+              <span className="font-medium text-lg">
+                {exam.exam_type === "subjective"
+                  ? exam.question_paper_page_count
+                    ? `${exam.question_paper_page_count} Page PDF`
+                    : "PDF Question Paper"
+                  : exam.total_questions}
+              </span>
             </div>
             <div className="flex flex-col gap-1">
               <span className="text-muted-foreground text-sm flex items-center gap-1">
@@ -188,6 +201,14 @@ export default function ExamDetailsPage() {
             <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground bg-muted/30 p-4 rounded-lg">
               {exam.instructions ? (
                 <div dangerouslySetInnerHTML={{ __html: exam.instructions }} />
+              ) : exam.exam_type === "subjective" ? (
+                <ul className="list-disc pl-4 space-y-2">
+                  <li>This is a timed subjective exam. The timer will start as soon as you click &quot;Start Exam&quot;.</li>
+                  <li>Read the official question paper PDF provided in the exam environment.</li>
+                  <li>Write your answers on physical paper and photograph or scan them to upload before the upload window closes.</li>
+                  <li>Your answers can be uploaded as photos or as a combined PDF document.</li>
+                  <li>The exam will automatically finalize when the upload window expires.</li>
+                </ul>
               ) : (
                 <ul className="list-disc pl-4 space-y-2">
                   <li>This is a timed exam. The timer will start as soon as you click &quot;Start Exam&quot;.</li>
@@ -202,7 +223,7 @@ export default function ExamDetailsPage() {
             </div>
           </div>
 
-          {((exam.objective_category === "past_year" || exam.objective_category === "model") || exam.exam_type === "subjective" || (exam.exam_type === "subject" && !!exam.topic_id)) && (
+          {exam.exam_type !== "subjective" && ((exam.objective_category === "past_year" || exam.objective_category === "model") || (exam.exam_type === "subject" && !!exam.topic_id)) && (
             <section className="mt-6 space-y-3 border-t border-border/50 pt-5" aria-labelledby="expert-solution-heading">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 id="expert-solution-heading" className="font-semibold text-lg">Expert Solution</h3>
@@ -235,21 +256,41 @@ export default function ExamDetailsPage() {
             {exam.active_attempt_id ? (
               <Button asChild className="w-full sm:w-auto bg-[#D4A72C] hover:bg-[#D4A72C]/90 text-[#0B2545] font-bold gap-2">
                 <Link href={`/student/exams/${examId}/attempt/${exam.active_attempt_id}`}>
-                  <Play className="h-4 w-4 fill-current" /> Resume Exam
+                  <Play className="h-4 w-4 fill-current" /> Continue Exam
                 </Link>
               </Button>
             ) : exam.has_attempted ? (
-              <>
-                <Button asChild variant="outline" size="sm" className="text-xs font-semibold">
-                  <Link href="/student/results">View Result</Link>
-                </Button>
-                <Button
-                  disabled
-                  className="w-full sm:w-auto bg-muted text-muted-foreground border border-border cursor-not-allowed opacity-70 pointer-events-none font-bold gap-2"
-                >
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Already Taken
-                </Button>
-              </>
+              exam.is_result_published ? (
+                <>
+                  <Button asChild className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2">
+                    <Link href={exam.latest_attempt_id ? `/student/exams/${examId}/result/${exam.latest_attempt_id}` : '/student/results'}>
+                      <CheckCircle2 className="h-4 w-4" /> View Result
+                    </Link>
+                  </Button>
+                  <Button
+                    disabled
+                    className="w-full sm:w-auto bg-muted text-muted-foreground border border-border cursor-not-allowed opacity-70 pointer-events-none font-bold gap-2"
+                  >
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Completed
+                  </Button>
+                </>
+              ) : (
+                <>
+                  {exam.latest_attempt_id && (
+                    <Button asChild variant="outline" size="sm" className="text-xs font-semibold gap-1.5">
+                      <Link href={`/student/exams/${examId}/attempt/${exam.latest_attempt_id}`}>
+                        <FileText className="h-3.5 w-3.5" /> View Submission
+                      </Link>
+                    </Button>
+                  )}
+                  <Button
+                    disabled
+                    className="w-full sm:w-auto bg-muted text-muted-foreground border border-border cursor-not-allowed opacity-80 font-bold gap-2"
+                  >
+                    <Clock className="h-4 w-4 text-amber-500" /> Submitted (Evaluation Pending)
+                  </Button>
+                </>
+              )
             ) : requiresAdminRequest && isLoadingRequests ? (
               <Button disabled className="w-full sm:w-auto">Checking request status...</Button>
             ) : requiresAdminRequest && !examRequest ? (
@@ -261,7 +302,7 @@ export default function ExamDetailsPage() {
                 <FileText className="h-4 w-4" />{requestExamMutation.isPending ? "Requesting..." : "Request Admin for Exam"}
               </Button>
             ) : requiresAdminRequest && examRequest?.status === "pending" ? (
-              <Button disabled className="w-full sm:w-auto">Request Pending</Button>
+              <Button disabled className="w-full sm:w-auto">Request Submitted (Waiting for Admin)</Button>
             ) : requiresAdminRequest && examRequest?.status === "rejected" ? (
               <div className="max-w-sm text-right text-sm" role="status">
                 <p className="font-semibold text-destructive">Request Rejected</p>
