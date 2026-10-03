@@ -47,16 +47,17 @@ class AITutorService:
     MAX_KNOWLEDGE_MATCHES = 2
     MAX_EXCERPT_CHARS = 800
 
-    def retrieve_knowledge_context(self, question_text):
+    def retrieve_knowledge_context(self, question_text, student=None):
         """Keyword-matches the student's question against admin-curated
         StudyMaterial content (status='published', available_to_ai_tutor=True)
         and returns a formatted reference block, or '' if nothing matches.
 
         Deliberately keyword-based rather than embedding-based: no extra
         provider API calls or vector store needed, everything is a plain
-        database query.
+        database query. Filtered to courses the requesting student is entitled to.
         """
         from notes.models import StudyMaterial
+        from courses.services.course_access_service import CourseAccessService
         import re
 
         words = re.findall(r"[a-zA-Z]{4,}", question_text.lower())
@@ -67,6 +68,9 @@ class AITutorService:
         candidates = StudyMaterial.objects.filter(
             status='published', available_to_ai_tutor=True
         ).exclude(content='')
+
+        if student:
+            candidates = CourseAccessService.filter_notes_queryset(student, candidates)
 
         scored = []
         for material in candidates:
@@ -109,7 +113,9 @@ class AITutorService:
             chat_history.append(types.Content(role=gemini_role, parts=[types.Part.from_text(text=msg.content)]))
 
         system_prompt = self.construct_system_prompt(conversation)
-        system_prompt += self.retrieve_knowledge_context(new_user_message_content)
+        student = getattr(conversation, 'student', None)
+        system_prompt += self.retrieve_knowledge_context(new_user_message_content, student=student)
+
 
         try:
             config = types.GenerateContentConfig(

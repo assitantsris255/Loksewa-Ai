@@ -1,8 +1,13 @@
 from rest_framework import serializers
 from exams.models import Question, Topic, Subject, Chapter, ExamCategory, Exam, QuestionCollection
 from core.models import Tag
+from courses.models import Course
+from courses.services.course_access_service import CourseAccessService
 
 class AdminQuestionSerializer(serializers.ModelSerializer):
+    course = serializers.PrimaryKeyRelatedField(
+        queryset=Course.objects.all(), required=False, allow_null=True, write_only=True
+    )
     subject = serializers.PrimaryKeyRelatedField(
         queryset=Subject.objects.all(), required=False, allow_null=True
     )
@@ -18,6 +23,32 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
     position = serializers.PrimaryKeyRelatedField(
         queryset=Exam.objects.all(), required=False, allow_null=True, source='exam'
     )
+
+    course_id = serializers.SerializerMethodField()
+    course_title = serializers.SerializerMethodField()
+    mapping_status = serializers.SerializerMethodField()
+    mapping_status_display = serializers.SerializerMethodField()
+
+    def get_course_id(self, obj):
+        course = CourseAccessService.get_question_course(obj)
+        return course.id if course else None
+
+    def get_course_title(self, obj):
+        course = CourseAccessService.get_question_course(obj)
+        return course.title if course else None
+
+    def get_mapping_status(self, obj):
+        return CourseAccessService.get_question_mapping_status(obj)
+
+    def get_mapping_status_display(self, obj):
+        status_val = CourseAccessService.get_question_mapping_status(obj)
+        displays = {
+            'mapped': 'Mapped',
+            'incomplete': 'Incomplete',
+            'unassigned': 'Unassigned',
+            'invalid': 'Invalid',
+        }
+        return displays.get(status_val, 'Unassigned')
 
     collections = serializers.SerializerMethodField()
     collection_ids = serializers.PrimaryKeyRelatedField(
@@ -162,6 +193,7 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
         model = Question
         fields = [
             'id', 'question_id', 'question_type', 'status',
+            'course', 'course_id', 'course_title', 'mapping_status', 'mapping_status_display',
             'subject', 'chapter', 'topic',
             'topic_name', 'chapter_name', 'subject_name', 'position_name', 'category_name', 
             'chapter_id', 'subject_id', 'position_id', 'category_id',
@@ -178,13 +210,43 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
         """
         Validate question rules based on type and academic hierarchy.
         Subject is optional; Category and Position/Level are accepted and auto-inferred.
+        Enforces strict course-level validity and rejects mismatched academic combinations.
         """
         # Academic hierarchy validation
+        course = data.get('course')
         subject = data.get('subject') or (self.instance.subject if self.instance else None)
         chapter = data.get('chapter') if 'chapter' in data else (self.instance.chapter if self.instance else None)
         topic = data.get('topic') if 'topic' in data else (self.instance.topic if self.instance else None)
         position = data.get('exam') or (self.instance.exam if self.instance else None)
         category = data.get('category') or (self.instance.category if self.instance else None)
+
+        # Course-level validation
+        if course:
+            course_exam_ids = CourseAccessService.get_course_exam_ids(course)
+            if not course_exam_ids:
+                raise serializers.ValidationError({
+                    "course": f"Course '{course.title}' has no associated academic exams or levels."
+                })
+            
+            # Default position to course exam if not explicitly provided
+            if not position and course.exam:
+                position = course.exam
+                data['exam'] = position
+                if not category and course.exam.category:
+                    category = course.exam.category
+                    data['category'] = category
+
+            if position and position.id not in course_exam_ids:
+                raise serializers.ValidationError({
+                    "position": f"Selected level/position '{position.name}' does not belong to course '{course.title}'."
+                })
+
+            if subject:
+                sub_exam_id = subject.paper.exam_id if (subject.paper_id and subject.paper) else None
+                if sub_exam_id and sub_exam_id not in course_exam_ids:
+                    raise serializers.ValidationError({
+                        "subject": f"Selected subject '{subject.name}' does not belong to course '{course.title}'."
+                    })
 
         # Auto-infer parents from topic/chapter if needed
         if topic:
@@ -240,6 +302,25 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
             if position.category_id != category.id:
                 raise serializers.ValidationError({
                     "position": f"Position/Level '{position.name}' does not belong to category '{category.name}'."
+                })
+
+        # 5. Validate that approved questions map to an active published course
+        target_status = data.get('status') or (self.instance.status if self.instance else 'draft')
+        if target_status == 'approved':
+            resolved_exam_id = None
+            if position:
+                resolved_exam_id = position.id
+            elif subject and getattr(subject, 'paper_id', None) and subject.paper:
+                resolved_exam_id = subject.paper.exam_id
+            elif chapter and chapter.subject and chapter.subject.paper:
+                resolved_exam_id = chapter.subject.paper.exam_id
+            elif topic and topic.chapter and topic.chapter.subject and topic.chapter.subject.paper:
+                resolved_exam_id = topic.chapter.subject.paper.exam_id
+
+            all_course_exam_ids = CourseAccessService.get_all_course_exam_ids()
+            if not resolved_exam_id or resolved_exam_id not in all_course_exam_ids:
+                raise serializers.ValidationError({
+                    "course": "Approved questions intended for student practice must map to an active published course."
                 })
 
         # Type-specific validation

@@ -79,7 +79,24 @@ urlpatterns = [
 ]
 
 from django.conf import settings
-from django.conf.urls.static import static
+from django.views.static import serve as static_serve
+from django.http import HttpResponseForbidden
 
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+PROTECTED_MEDIA_PREFIXES = (
+    'study_materials/',
+    'subjective_exams/',
+    'marketplace/materials/',
+    'support/attachments/',
+)
+
+def secure_media_serve(request, path, document_root=None, show_indexes=False):
+    normalized_path = path.replace('\\', '/').lstrip('/')
+    for prefix in PROTECTED_MEDIA_PREFIXES:
+        if normalized_path.startswith(prefix):
+            return HttpResponseForbidden("Direct access to protected media files is forbidden. Please access files via the authorized API.")
+    return static_serve(request, path, document_root=document_root, show_indexes=show_indexes)
+
+media_url_prefix = settings.MEDIA_URL.lstrip('/')
+urlpatterns += [
+    path(f'{media_url_prefix}<path:path>', secure_media_serve, {'document_root': settings.MEDIA_ROOT}),
+]

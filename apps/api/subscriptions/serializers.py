@@ -51,7 +51,7 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
     def get_eligible_courses_details(self, obj):
         return [
             self._format_course_detail(c)
-            for c in obj.eligible_courses.select_related('exam', 'exam__parent', 'exam__category').all()
+            for c in obj.eligible_courses.all()
         ]
 
     def get_course_details(self, obj):

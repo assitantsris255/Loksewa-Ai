@@ -410,6 +410,12 @@ class RankedAttemptMixin(serializers.Serializer):
         if obj.percentage is None or obj.status not in ['submitted', 'evaluated']:
             return None
         
+        from django.core.cache import cache
+        cache_key = f"att_rank:{obj.examination_id}:{int(obj.percentage * 100)}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         # DenseRank logic: number of distinct higher percentages + 1
         # This matches exactly how the leaderboard ranks students.
         higher_scores_count = ExaminationAttempt.objects.filter(
@@ -417,13 +423,29 @@ class RankedAttemptMixin(serializers.Serializer):
             status__in=['submitted', 'evaluated'],
             percentage__gt=obj.percentage
         ).values('percentage').distinct().count()
-        return higher_scores_count + 1
+        rank = higher_scores_count + 1
+        try:
+            cache.set(cache_key, rank, 60)
+        except Exception:
+            pass
+        return rank
 
     def get_total_participants(self, obj):
-        return ExaminationAttempt.objects.filter(
+        from django.core.cache import cache
+        cache_key = f"att_participants:{obj.examination_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        count = ExaminationAttempt.objects.filter(
             examination=obj.examination,
             status__in=['submitted', 'evaluated']
         ).values('student').distinct().count()
+        try:
+            cache.set(cache_key, count, 60)
+        except Exception:
+            pass
+        return count
 
 class StudentExaminationAttemptSerializer(AttemptTimingMixin, serializers.ModelSerializer):
     examination_title = serializers.CharField(source='examination.title', read_only=True)

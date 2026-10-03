@@ -359,6 +359,8 @@ class StudentExamAccessControlTestCase(APITestCase):
             category=self.category, exam=self.exam_civil, course=self.course_civil,
             status='published', time_limit=90, total_marks=10,
         )
+        from django.core.files.base import ContentFile
+        subjective_exam.question_paper_pdf.save("test_paper.pdf", ContentFile(b"%PDF-1.4 dummy pdf"))
         ExaminationQuestion.objects.create(
             examination=subjective_exam,
             question=Question.objects.create(

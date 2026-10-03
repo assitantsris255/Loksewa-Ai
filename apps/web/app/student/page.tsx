@@ -15,7 +15,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { RetryImage } from "@/components/ui/retry-image";
 import { dashboardApi, QUICK_ACTIONS } from "@/lib/api/dashboard";
 import { gamificationService } from "@/lib/api/gamification";
-import { courseEnrollmentApi } from "@/lib/api/enrollment";
 import { notesApi } from "@/lib/api/notes";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
@@ -39,8 +38,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
-import { LoksewaExamCountdown, nextOfficialExamQuery } from "@/components/student/countdown/LoksewaExamCountdown";
-import { MockExamCountdown, upcomingMockExamQuery } from "@/components/student/countdown/MockExamCountdown";
+import { LoksewaExamCountdown } from "@/components/student/countdown/LoksewaExamCountdown";
+import { MockExamCountdown } from "@/components/student/countdown/MockExamCountdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOptionalStudentContext } from "@/contexts/StudentContext";
 
@@ -133,22 +132,13 @@ export default function StudentDashboardPage() {
   } = useQuery({
     queryKey: ["student-dashboard", effectiveCourseId ?? null],
     queryFn: () => dashboardApi.getStudentDashboard(effectiveCourseId),
-    enabled: !isCtxLoading,
     staleTime: 45 * 1000,
   });
   const loading = !data && (isCtxLoading || isDashboardLoading);
   const error = isError && !data;
 
   // Background/secondary data - each cached independently so, e.g., a
-  // stale referral list doesn't block a fresh analytics overview. All keep
-  // the exact same "swallow errors, render nothing" behavior the previous
-  // useState+.catch(() => null) version had, so no UI branch changes -
-  // only the caching/refetch layer underneath them does.
-  // Start the two countdown widgets' requests now, in parallel with the main
-  // dashboard request - they only mount once the dashboard data has arrived,
-  // so without this they would start after it and queue behind it.
-  useQuery(nextOfficialExamQuery);
-  useQuery(upcomingMockExamQuery);
+  // stale referral list doesn't block a fresh analytics overview.
   const { data: motivation } = useQuery({
     // Same quote all day - safe to treat as very stable.
     queryKey: ["daily-motivation"],
@@ -165,29 +155,20 @@ export default function StudentDashboardPage() {
     queryFn: () => gamificationService.getStudentReferralHistory().catch(() => []),
     staleTime: 60 * 1000,
   });
-  const { data: enrollmentStatus } = useQuery({
-    // Enrollment changes only on a purchase/enrollment action, not passively -
-    // safe to treat as fairly stable; the purchase flow invalidates this key
-    // directly (see courseEnrollmentApi usages) rather than relying on TTL.
-    queryKey: ["my-enrollment"],
-    queryFn: () => courseEnrollmentApi.getMyEnrollment().catch(() => null),
-    staleTime: 5 * 60 * 1000,
-  });
 
   // Background data warming: once the dashboard itself has rendered, quietly
-  // pre-fetch Syllabus's own data (the most-visited next destination from
-  // here) into the shared cache so that navigating there lands on an instant
-  // cache hit instead of a fresh loading state. prefetchQuery is a no-op if
-  // this key is already cached and fresh, so this never causes extra network
-  // traffic on a warm return visit.
+  // pre-fetch Syllabus data after a 2.5s delay to keep network free for initial render.
   const queryClient = useQueryClient();
   useEffect(() => {
     if (!data) return;
-    queryClient.prefetchQuery({
-      queryKey: ["syllabus-notes-portal", null],
-      queryFn: () => notesApi.getStudentPortalView(undefined),
-      staleTime: 5 * 60 * 1000,
-    });
+    const timer = setTimeout(() => {
+      queryClient.prefetchQuery({
+        queryKey: ["syllabus-notes-portal", null],
+        queryFn: () => notesApi.getStudentPortalView(undefined),
+        staleTime: 5 * 60 * 1000,
+      });
+    }, 2500);
+    return () => clearTimeout(timer);
   }, [data, queryClient]);
 
   // ── DnD state ──────────────────────────────────────────────────────────────
@@ -562,9 +543,9 @@ export default function StudentDashboardPage() {
                   </span>
                 </div>
 
-                {enrollmentStatus?.enrollment?.course && (
+                {(studentCtx?.activeCourse?.title || data.activeCourse?.name) && (
                   <div className="font-semibold text-slate-200 text-xs leading-snug">
-                    {enrollmentStatus.enrollment.course.title}
+                    {studentCtx?.activeCourse?.title || data.activeCourse?.name}
                   </div>
                 )}
 
@@ -583,60 +564,6 @@ export default function StudentDashboardPage() {
 
                 <Button asChild className="w-full mt-2 bg-[#D4A72C] hover:bg-[#D4A72C]/90 text-[#0A1118] h-9 text-xs font-bold shadow-sm transition-colors">
                   <Link href="/student/courses">Go to My Courses</Link>
-                </Button>
-              </div>
-            ) : enrollmentStatus?.has_active_enrollment && enrollmentStatus.enrollment ? (
-              <div className="relative z-10 space-y-3">
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 bg-[#D4A72C] rounded-lg"><GraduationCap className="w-4 h-4 text-[#0A1118]" /></div>
-                  <span className="font-bold text-lg tracking-tight text-white">Active Course</span>
-                </div>
-                <div className="font-semibold text-white text-sm leading-snug">{enrollmentStatus.enrollment.course.title}</div>
-                {enrollmentStatus.enrollment.course.exam && (
-                  <div className="text-[11px] text-slate-400 font-medium">{enrollmentStatus.enrollment.course.exam.title}</div>
-                )}
-                {analytics && (
-                  <div className="pt-2 border-t border-white/15">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-xs text-slate-400 font-medium">Journey Progress</span>
-                      <span className="text-xs font-bold text-[#D4A72C]">{analytics.journey_progress}%</span>
-                    </div>
-                    <Progress value={analytics.journey_progress} className="h-1.5 bg-white/10" indicatorClassName="bg-[#D4A72C]" />
-                  </div>
-                )}
-                <Button asChild className="w-full mt-2 bg-[#D4A72C] hover:bg-[#D4A72C]/90 text-[#0A1118] h-9 text-xs font-bold shadow-sm transition-colors">
-                  <Link href="/student/study-plan">Resume Journey</Link>
-                </Button>
-              </div>
-            ) : enrollmentStatus?.application?.status === 'pending' ? (
-              <div className="relative z-10 space-y-3">
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 bg-yellow-400/20 rounded-lg"><Clock className="w-4 h-4 text-yellow-300" /></div>
-                  <span className="font-bold text-lg tracking-tight text-white">Application Pending</span>
-                </div>
-                <div className="font-semibold text-yellow-300 text-sm leading-snug">{enrollmentStatus.application.course.title}</div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Your application is under review. You'll be notified once it's approved.
-                  {enrollmentStatus.payment?.status === 'PENDING' && (
-                    <span className="block mt-1 text-yellow-400 font-medium">Payment verification in progress.</span>
-                  )}
-                </p>
-                <Button asChild variant="outline" className="w-full mt-2 border-white/20 hover:bg-white/10 hover:text-white bg-white/5 text-white h-9 text-xs font-bold">
-                  <Link href="/student/purchases">View Payment Status</Link>
-                </Button>
-              </div>
-            ) : enrollmentStatus?.application?.status === 'rejected' ? (
-              <div className="relative z-10 space-y-3">
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 bg-red-500/20 rounded-lg"><AlertCircle className="w-4 h-4 text-red-300" /></div>
-                  <span className="font-bold text-lg tracking-tight text-white">Application Rejected</span>
-                </div>
-                {enrollmentStatus.application.note && (
-                  <p className="text-xs text-red-300 leading-relaxed">{enrollmentStatus.application.note}</p>
-                )}
-                <p className="text-xs text-slate-300 leading-relaxed">Please contact support or apply again.</p>
-                <Button asChild className="w-full mt-2 bg-[#D4A72C] hover:bg-[#D4A72C]/90 text-[#0A1118] h-9 text-xs font-bold">
-                  <Link href="/student/plans">Apply Again</Link>
                 </Button>
               </div>
             ) : analytics?.active_course ? (

@@ -71,3 +71,10 @@ input.txt
 verify*.py
 migrate_sq.py
 verification_report.md
+apps/api/backups/
+apps/api/scratch/
+scratch/
+audit_*.py
+scratch_*.py
+*.pre_recovery_backup*
+

@@ -45,7 +45,6 @@ export default function ExamsListingPage() {
   const { data: exams, isLoading: isLoadingExams } = useQuery({
     queryKey: ['student-exams', effectiveCourseId ?? null],
     queryFn: () => studentExamsApi.getExams(effectiveCourseId),
-    enabled: !isCtxLoading,
     staleTime: 60 * 1000,
   });
 

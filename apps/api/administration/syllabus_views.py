@@ -10,6 +10,7 @@ from .syllabus_serializers import (
     ExamCategorySerializer, ExamSerializer, PaperSerializer, SubjectSerializer, 
     ChapterSerializer, TopicSerializer, ReorderSerializer
 )
+from .safe_delete_service import SafeDeleteService
 
 def get_node_dependencies(instance):
     counts = {
@@ -128,19 +129,21 @@ class BaseSyllabusViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        deps = get_node_dependencies(instance)
-        return Response(
-            {
+        if request.query_params.get('force') == 'true':
+            deps = get_node_dependencies(instance)
+            return Response({
                 'error': 'Deletion of master academic records is disabled.',
-                'message': (
-                    'This academic node is shared by platform modules. Archive it instead; '
-                    'force deletion is disabled to protect existing content and relationships.'
-                ),
-                'dependencies': deps['counts'],
-                'can_archive': True,
-            },
-            status=status.HTTP_409_CONFLICT,
-        )
+                'detail': 'Direct force deletion of syllabus records is blocked to protect shared academic data. Use safe archiving or Trash.',
+                'dependencies': deps,
+            }, status=status.HTTP_409_CONFLICT)
+        reason = request.data.get('reason', '') if isinstance(request.data, dict) else ''
+        trash_item = SafeDeleteService.soft_delete(instance, request.user, reason=reason)
+        return Response({
+            'success': True,
+            'message': f"{trash_item.item_type} '{trash_item.title}' has been moved to Trash.",
+            'trash_item_id': trash_item.id,
+            'can_restore': True,
+        }, status=status.HTTP_200_OK)
 
 class ExamCategoryViewSet(BaseSyllabusViewSet):
     queryset = ExamCategory.objects.all().order_by('order', 'id')

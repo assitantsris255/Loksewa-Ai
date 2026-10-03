@@ -2974,14 +2974,14 @@ class AdminStudyMaterialDetailView(APIView):
         if not material:
             return Response({"error": "Study material not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        title = material.title
-        material.delete()
-        AuditLog.objects.create(
-            actor=request.user, action='DELETE_STUDY_MATERIAL',
-            entity_type='StudyMaterial', entity_id=str(pk),
-            details={"title": title},
-        )
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        from administration.safe_delete_service import SafeDeleteService
+        reason = request.data.get('reason', '') if isinstance(request.data, dict) else ''
+        trash_item = SafeDeleteService.soft_delete(material, request.user, reason=reason)
+        return Response({
+            'success': True,
+            'message': f"Study material '{trash_item.title}' has been moved to Trash.",
+            'trash_item_id': trash_item.id,
+        }, status=status.HTTP_200_OK)
 
 
 class AdminStudyMaterialsHierarchyView(APIView):

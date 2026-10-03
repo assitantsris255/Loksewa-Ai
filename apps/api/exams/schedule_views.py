@@ -83,6 +83,15 @@ class StudentExamScheduleNextView(APIView):
         user = request.user if request.user.is_authenticated else None
         course_id_param = request.query_params.get('course_id')
 
+        from django.core.cache import cache
+        cache_key = f'next_official_exam:{user.id if user else "anon"}:{course_id_param or "default"}'
+        try:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return Response(cached)
+        except Exception:
+            pass
+
         target_course = None
 
         if user and user.role == 'student':
@@ -109,12 +118,17 @@ class StudentExamScheduleNextView(APIView):
                 if active_c:
                     target_course = Course.objects.filter(id=active_c['id'], status='published').first()
                 else:
-                    return Response({
+                    res_data = {
                         "schedule": None,
                         "course_id": None,
                         "message": "No active course yet.",
                         "server_time": timezone.now().isoformat()
-                    })
+                    }
+                    try:
+                        cache.set(cache_key, res_data, 30)
+                    except Exception:
+                        pass
+                    return Response(res_data)
 
         elif course_id_param:
             # Public request with course_id
@@ -142,21 +156,31 @@ class StudentExamScheduleNextView(APIView):
                     ).select_related('exam_category', 'exam').order_by('-is_active', 'exam_date', 'exam_time').first()
 
             if not schedule:
-                return Response({
+                res_data = {
                     "schedule": None,
                     "course_id": target_course.id,
                     "course_title": target_course.title,
                     "message": "No exam schedule configured for this course yet.",
                     "server_time": timezone.now().isoformat()
-                })
+                }
+                try:
+                    cache.set(cache_key, res_data, 30)
+                except Exception:
+                    pass
+                return Response(res_data)
 
             serializer = StudentExamScheduleSerializer(schedule)
-            return Response({
+            res_data = {
                 "schedule": serializer.data,
                 "course_id": target_course.id,
                 "course_title": target_course.title,
                 "server_time": timezone.now().isoformat()
-            })
+            }
+            try:
+                cache.set(cache_key, res_data, 30)
+            except Exception:
+                pass
+            return Response(res_data)
 
         # Global fallback (unauthenticated public homepage)
         schedule = ExamSchedule.objects.filter(
@@ -172,17 +196,27 @@ class StudentExamScheduleNextView(APIView):
             ).select_related('exam_category', 'exam').order_by('exam_date', 'exam_time').first()
 
         if not schedule:
-            return Response({
+            res_data = {
                 "schedule": None,
                 "message": "No upcoming Loksewa exam scheduled.",
                 "server_time": timezone.now().isoformat()
-            })
+            }
+            try:
+                cache.set(cache_key, res_data, 30)
+            except Exception:
+                pass
+            return Response(res_data)
 
         serializer = StudentExamScheduleSerializer(schedule)
-        return Response({
+        res_data = {
             "schedule": serializer.data,
             "server_time": timezone.now().isoformat()
-        })
+        }
+        try:
+            cache.set(cache_key, res_data, 30)
+        except Exception:
+            pass
+        return Response(res_data)
 
 
 class StudentUpcomingMockExamView(APIView):
@@ -195,6 +229,16 @@ class StudentUpcomingMockExamView(APIView):
     def get(self, request):
         now = timezone.now()
         user = request.user if request.user.is_authenticated else None
+        req_course_id = request.query_params.get('course_id') or ''
+
+        from django.core.cache import cache
+        cache_key = f'upcoming_mock:{user.id if user else "anon"}:{req_course_id}'
+        try:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return Response(cached)
+        except Exception:
+            pass
 
         if user and user.role == 'student':
             from courses.access import authorized_courses, get_student_course_context, get_authorized_examination_filter
@@ -249,11 +293,16 @@ class StudentUpcomingMockExamView(APIView):
 
         if live_exam:
             serializer = StudentUpcomingMockExamSerializer(live_exam, context={'request': request})
-            return Response({
+            res_data = {
                 "mock_exam": serializer.data,
                 "status": "LIVE",
                 "server_time": now.isoformat()
-            })
+            }
+            try:
+                cache.set(cache_key, res_data, 30)
+            except Exception:
+                pass
+            return Response(res_data)
 
         # Otherwise find next upcoming exam
         upcoming_exam = base_qs.filter(
@@ -262,15 +311,25 @@ class StudentUpcomingMockExamView(APIView):
 
         if upcoming_exam:
             serializer = StudentUpcomingMockExamSerializer(upcoming_exam, context={'request': request})
-            return Response({
+            res_data = {
                 "mock_exam": serializer.data,
                 "status": "UPCOMING",
                 "server_time": now.isoformat()
-            })
+            }
+            try:
+                cache.set(cache_key, res_data, 30)
+            except Exception:
+                pass
+            return Response(res_data)
 
-        return Response({
+        res_data = {
             "mock_exam": None,
             "status": "NONE",
             "message": "No upcoming mock examinations scheduled.",
             "server_time": now.isoformat()
-        })
+        }
+        try:
+            cache.set(cache_key, res_data, 30)
+        except Exception:
+            pass
+        return Response(res_data)

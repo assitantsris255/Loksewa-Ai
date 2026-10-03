@@ -55,4 +55,16 @@ app.conf.beat_schedule = {
         'task': 'subscriptions.tasks.notify_expiring_and_expired_subscriptions',
         'schedule': crontab(hour=8, minute=0),
     },
+    # Production-grade automatic daily database backup.
+    # Runs at 02:00 server time, compresses, hashes, and replicates to Cloudflare R2.
+    'automatic-daily-database-backup': {
+        'task': 'administration.tasks.run_automatic_daily_backup',
+        'schedule': crontab(hour=2, minute=0),
+    },
+    # Automated daily retention policy cleanup.
+    # Runs at 03:00 server time, purges expired archives while protecting latest recovery point.
+    'cleanup-database-backup-retention': {
+        'task': 'administration.tasks.run_backup_retention_cleanup',
+        'schedule': crontab(hour=3, minute=0),
+    },
 }

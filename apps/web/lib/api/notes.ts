@@ -1,4 +1,6 @@
-import { apiClient } from './client';
+import { apiClient, downloadFile, getAuthToken, ApiError } from './client';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
 
 export interface StudyMaterial {
   id: number;
@@ -101,5 +103,28 @@ export const notesApi = {
       method: 'POST',
       body: JSON.stringify({ progress }),
     });
+  },
+
+  downloadMaterial: async (id: number, fallbackFilename: string = 'material.pdf'): Promise<void> => {
+    return downloadFile(`/notes/materials/${id}/download/`, fallbackFilename);
+  },
+
+  getMaterialBlobUrl: async (id: number): Promise<string> => {
+    const token = getAuthToken();
+    const url = `${API_URL}/notes/materials/${id}/download/?disposition=inline`;
+    const res = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      let errData;
+      try {
+        errData = await res.json();
+      } catch {
+        errData = { detail: res.statusText };
+      }
+      throw new ApiError(res.status, errData);
+    }
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
   },
 };

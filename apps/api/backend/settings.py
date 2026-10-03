@@ -274,11 +274,13 @@ if _active_db_url:
     _conn_max_age_env = os.environ.get('DJANGO_CONN_MAX_AGE') or os.environ.get('CONN_MAX_AGE')
     _conn_max_age = int(_conn_max_age_env) if _conn_max_age_env else (60 if _is_pooled else 600)
 
+    _conn_health_checks = _env_bool('DJANGO_CONN_HEALTH_CHECKS', False)
+
     DATABASES = {
         'default': dj_database_url.parse(
             _active_db_url,
             conn_max_age=_conn_max_age,
-            conn_health_checks=True,
+            conn_health_checks=_conn_health_checks,
             # Supabase requires TLS. This adds sslmode=require to OPTIONS;
             # no certificate is bundled or hardcoded.
             ssl_require=_is_postgres,
@@ -569,6 +571,19 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 # Keep failed jobs' tracebacks in results for a day, not forever.
 CELERY_RESULT_EXPIRES = 60 * 60 * 24
+
+# --- CLOUDFLARE R2 OFF-SITE DATABASE BACKUP CONFIGURATION ---
+R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID', '')
+R2_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID', '')
+R2_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY', '')
+R2_BUCKET_NAME = os.environ.get('R2_BUCKET_NAME', '')
+R2_ENDPOINT_URL = os.environ.get('R2_ENDPOINT_URL', '') or (
+    f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com" if R2_ACCOUNT_ID else ''
+)
+R2_BACKUP_PREFIX = os.environ.get('R2_BACKUP_PREFIX', 'loksewaai/backups/database').strip('/')
+BACKUP_RETENTION_DAYS = int(os.environ.get('BACKUP_RETENTION_DAYS', '30') or '30')
+BACKUP_SCHEDULE_TIME = os.environ.get('BACKUP_SCHEDULE_TIME', '02:00')
+BACKUP_KEEP_LOCAL_COPY = os.environ.get('BACKUP_KEEP_LOCAL_COPY', 'true').lower() in ('1', 'true', 'yes')
 
 # --- LOGGING ---
 # Without this, Django falls back to its bare-bones default: console-only

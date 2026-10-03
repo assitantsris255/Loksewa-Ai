@@ -43,74 +43,53 @@ class StudyMaterialViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        from courses.services.course_access_service import CourseAccessService
+
         queryset = StudyMaterial.objects.filter(status='published').select_related(
             'subject', 'chapter', 'topic', 'exam', 'exam__parent', 'exam__category', 'course'
         )
 
         user = self.request.user
-        is_privileged = user.is_staff or user.is_superuser or user.role in ('admin', 'super-admin', 'teacher')
 
-        # Enforce Enrollment & Preparation Access Control for students
-        if not is_privileged:
-            from courses.models import Enrollment
-            active_enrollments = Enrollment.objects.filter(student=user, status='active').select_related('course', 'course__exam')
-            authorized_course_ids = set(e.course_id for e in active_enrollments)
-            authorized_exam_ids = set(e.course.exam_id for e in active_enrollments if e.course and e.course.exam_id)
+        # 1. Authoritative course-level and academic-scope filtering via CourseAccessService
+        queryset = CourseAccessService.filter_notes_queryset(user, queryset, allow_public_free=False)
 
-            profile = getattr(user, 'student_profile', None)
-            if profile:
-                if profile.target_course_id:
-                    authorized_course_ids.add(profile.target_course_id)
-                if profile.target_position_id:
-                    authorized_exam_ids.add(profile.target_position_id)
-                    for child in profile.target_position.children.all():
-                        authorized_exam_ids.add(child.id)
-
-            exam_param = self.request.query_params.get('exam')
-            if exam_param:
-                try:
-                    requested_exam_id = int(exam_param)
-                    if requested_exam_id not in authorized_exam_ids:
-                        from exams.models import Exam
-                        req_exam = Exam.objects.filter(pk=requested_exam_id).first()
-                        if not req_exam or not req_exam.courses.filter(id__in=authorized_course_ids).exists():
-                            return queryset.none()
-                except (ValueError, TypeError):
+        # 2. Specific query param filtering with strict validation against authorized scope
+        course_param = self.request.query_params.get('course')
+        if course_param:
+            try:
+                c_id = int(course_param)
+                if not CourseAccessService.has_course_access(user, c_id):
                     return queryset.none()
-            else:
-                # If no specific exam requested, filter to authorized preparations
-                if authorized_exam_ids or authorized_course_ids:
-                    queryset = queryset.filter(Q(exam_id__in=authorized_exam_ids) | Q(course_id__in=authorized_course_ids))
-                else:
+                queryset = queryset.filter(course_id=c_id)
+            except (ValueError, TypeError):
+                return queryset.none()
+
+        exam_param = self.request.query_params.get('exam')
+        if exam_param:
+            try:
+                e_id = int(exam_param)
+                scope = CourseAccessService.get_accessible_exam_ids(user)
+                if scope is not None and e_id not in scope:
                     return queryset.none()
+                queryset = queryset.filter(exam_id=e_id)
+            except (ValueError, TypeError):
+                return queryset.none()
 
-        # Package access control - premium materials require an active subscription
-        from core.models import AdminSettings
-        if AdminSettings.get_settings().enforce_subscription_access and not is_privileged:
-            if not has_active_subscription(user):
-                queryset = queryset.filter(access_type='free')
-
-        # Filtering
-        exam = self.request.query_params.get('exam')
         subject = self.request.query_params.get('subject')
         chapter = self.request.query_params.get('chapter')
         topic = self.request.query_params.get('topic')
-        course = self.request.query_params.get('course')
         material_type = self.request.query_params.get('material_type')
         content_category = self.request.query_params.get('content_category')
         note_type = self.request.query_params.get('note_type')
         search = self.request.query_params.get('search')
 
-        if exam:
-            queryset = queryset.filter(exam_id=exam)
         if subject:
             queryset = queryset.filter(subject_id=subject)
         if chapter:
             queryset = queryset.filter(chapter_id=chapter)
         if topic:
             queryset = queryset.filter(topic_id=topic)
-        if course:
-            queryset = queryset.filter(course_id=course)
         if material_type:
             queryset = queryset.filter(material_type=material_type)
         if content_category:
@@ -130,6 +109,54 @@ class StudyMaterialViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == 'retrieve':
             return StudyMaterialDetailSerializer
         return StudyMaterialListSerializer
+
+    def retrieve(self, request, *args, **kwargs):
+        from courses.services.course_access_service import CourseAccessService
+        material = self.get_object()
+        if not CourseAccessService.has_note_access(request.user, material):
+            return Response(
+                {"detail": "You do not have access to this study material."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        serializer = self.get_serializer(material)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        """Secure download action enforcing course authorization and download permission."""
+        from courses.services.course_access_service import CourseAccessService
+        from django.http import FileResponse
+
+        material = self.get_object()
+        if not CourseAccessService.has_note_access(request.user, material):
+            return Response(
+                {"detail": "You do not have access to this study material."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        disposition = request.query_params.get('disposition', 'attachment').lower()
+        is_inline = disposition == 'inline'
+        if not material.is_downloadable and not is_inline:
+            return Response(
+                {"detail": "Downloads are disabled for this study material."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        if not material.file:
+            return Response(
+                {"detail": "No file attached to this material."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            response = FileResponse(
+                material.file.open('rb'),
+                as_attachment=not is_inline,
+                filename=f"{material.slug or 'material'}.pdf"
+            )
+            response['Access-Control-Expose-Headers'] = 'Content-Disposition'
+            return response
+        except Exception as e:
+            return Response({"detail": f"Could not read file: {e}"}, status=status.HTTP_404_NOT_FOUND)
+
 
     @action(detail=True, methods=['post', 'delete'])
     def bookmark(self, request, pk=None):
@@ -163,35 +190,28 @@ class StudyMaterialViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'])
     def bookmarks(self, request):
+        from courses.services.course_access_service import CourseAccessService
         bookmarks = StudentMaterialBookmark.objects.filter(student=request.user).values_list('material_id', flat=True)
         queryset = StudyMaterial.objects.filter(id__in=bookmarks, status='published')
-
-        user = request.user
-        if not (user.is_staff or user.is_superuser or user.role in ('admin', 'super-admin', 'teacher')):
-            from courses.models import Enrollment
-            active_courses = Enrollment.objects.filter(student=user, status='active').values_list('course_id', flat=True)
-            queryset = queryset.filter(Q(course__isnull=True) | Q(course_id__in=active_courses))
-
+        queryset = CourseAccessService.filter_notes_queryset(request.user, queryset)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
     @action(detail=False, methods=['get'])
     def recent(self, request):
+        from courses.services.course_access_service import CourseAccessService
         recent_progress = StudentMaterialProgress.objects.filter(student=request.user).order_by('-last_viewed_at')[:5]
         material_ids = [rp.material_id for rp in recent_progress]
 
         queryset = StudyMaterial.objects.filter(id__in=material_ids, status='published')
-        user = request.user
-        if not (user.is_staff or user.is_superuser or user.role in ('admin', 'super-admin', 'teacher')):
-            from courses.models import Enrollment
-            active_courses = Enrollment.objects.filter(student=user, status='active').values_list('course_id', flat=True)
-            queryset = queryset.filter(Q(course__isnull=True) | Q(course_id__in=active_courses))
+        queryset = CourseAccessService.filter_notes_queryset(request.user, queryset)
 
         materials_dict = {m.id: m for m in queryset}
         ordered_materials = [materials_dict[mid] for mid in material_ids if mid in materials_dict]
 
         serializer = self.get_serializer(ordered_materials, many=True)
         return Response(serializer.data)
+
 
 
 class StudentPortalSyllabusNotesView(APIView):
@@ -325,12 +345,20 @@ class StudentPortalSyllabusNotesView(APIView):
         selected_exam = selected_info['exam']
         selected_course = selected_info['course']
 
+        from courses.services.course_access_service import CourseAccessService
+
         materials_qs = StudyMaterial.objects.filter(
             exam=selected_exam, status='published'
         ).select_related(
             'subject', 'chapter', 'topic', 'course', 'exam', 'exam__parent', 'exam__category'
         ).order_by('-created_at')
+
+        if selected_course:
+            materials_qs = materials_qs.filter(Q(course=selected_course) | Q(course__isnull=True))
+
+        materials_qs = CourseAccessService.filter_notes_queryset(user, materials_qs)
         materials_qs = with_student_state(materials_qs, user)
+
 
         from core.models import AdminSettings
         if AdminSettings.get_settings().enforce_subscription_access and not is_staff_or_teacher:
@@ -423,7 +451,13 @@ class TeacherStudyMaterialViewSet(viewsets.ModelViewSet):
     serializer_class = TeacherStudyMaterialSerializer
 
     def get_queryset(self):
-        queryset = StudyMaterial.objects.filter(teacher=self.request.user)
+        from courses.models import TeacherCourseAssignment
+        assigned_course_ids = TeacherCourseAssignment.objects.filter(
+            teacher=self.request.user
+        ).values_list('course_id', flat=True)
+        queryset = StudyMaterial.objects.filter(
+            Q(teacher=self.request.user) | Q(course_id__in=assigned_course_ids)
+        ).distinct()
 
         status_filter = self.request.query_params.get('status')
         exam = self.request.query_params.get('exam')
@@ -492,11 +526,41 @@ class TeacherStudyMaterialViewSet(viewsets.ModelViewSet):
         material.save()
         return Response(TeacherStudyMaterialSerializer(material).data)
 
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        from django.http import FileResponse
+        material = self.get_object()
+        if not material.file:
+            return Response({"detail": "No file attached to this material."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            return FileResponse(
+                material.file.open('rb'),
+                as_attachment=True,
+                filename=f"{material.slug or 'material'}.pdf"
+            )
+        except Exception as e:
+            return Response({"detail": f"Could not read file: {e}"}, status=status.HTTP_404_NOT_FOUND)
+
 
 class AdminStudyMaterialViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminUser]
     serializer_class = AdminStudyMaterialSerializer
     queryset = StudyMaterial.objects.all().order_by('-updated_at')
+
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        from django.http import FileResponse
+        material = self.get_object()
+        if not material.file:
+            return Response({"detail": "No file attached to this material."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            return FileResponse(
+                material.file.open('rb'),
+                as_attachment=True,
+                filename=f"{material.slug or 'material'}.pdf"
+            )
+        except Exception as e:
+            return Response({"detail": f"Could not read file: {e}"}, status=status.HTTP_404_NOT_FOUND)
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, Bell, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -154,8 +155,16 @@ export function DashboardHeader({ onMenuClick, role = "student" }: DashboardHead
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-[13px]">Profile</DropdownMenuItem>
-            <DropdownMenuItem className="text-[13px]">Settings</DropdownMenuItem>
+            <DropdownMenuItem asChild className="text-[13px] cursor-pointer">
+              <Link href={role === "student" ? "/student/settings" : `/${role}/settings`}>
+                Profile
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="text-[13px] cursor-pointer">
+              <Link href={role === "student" ? "/student/settings" : `/${role}/settings`}>
+                Settings
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem 
               className="text-[13px] text-red-600 dark:text-red-400 focus:bg-red-50 focus:text-red-700 dark:focus:bg-red-950/30 dark:focus:text-red-400 cursor-pointer"

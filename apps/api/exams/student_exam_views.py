@@ -722,6 +722,11 @@ class StudentExaminationAttemptViewSet(viewsets.ModelViewSet):
     serializer_class = StudentExaminationAttemptSerializer
     pagination_class = StandardResultsSetPagination
     
+    def get_permissions(self):
+        if self.action in ['active', 'state']:
+            return [IsAuthenticated()]
+        return super().get_permissions()
+    
     def get_queryset(self):
         user = self.request.user
         qs = (
@@ -777,6 +782,11 @@ class StudentExaminationAttemptViewSet(viewsets.ModelViewSet):
         tab, or a second device re-applies exam focus from server state rather
         than from anything the browser remembered.
         """
+        # Fast exit: if student has no in-progress attempt at all, return empty list immediately
+        # without running heavy course authorization filter or prefetching questions/answers.
+        if not ExaminationAttempt.objects.filter(student=request.user, status='in-progress').exists():
+            return Response([])
+
         attempts = self.get_queryset().filter(status='in-progress')
         live = []
         for attempt in attempts:
@@ -890,7 +900,7 @@ class StudentExaminationAttemptViewSet(viewsets.ModelViewSet):
             return Response({'detail': detail, 'status': attempt.status},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        question_id = request.data.get('question')
+        question_id = request.data.get('question') or request.data.get('question_id')
         selected_option = request.data.get('selected_option')
         # Descriptive answer for short_answer/long_answer/subjective questions.
         # 'answer_text' not present in the payload at all (vs explicitly "")
@@ -908,6 +918,17 @@ class StudentExaminationAttemptViewSet(viewsets.ModelViewSet):
             question = Question.objects.get(pk=question_id)
         except Question.DoesNotExist:
             return Response({'detail': 'Question not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Ensure the question actually belongs to this examination
+        is_valid_q = False
+        if attempt.examination.question_set_id and attempt.examination.question_set:
+            is_valid_q = attempt.examination.question_set.questions.filter(pk=question.pk).exists()
+        else:
+            from .models import ExaminationQuestion
+            is_valid_q = ExaminationQuestion.objects.filter(examination=attempt.examination, question=question).exists()
+
+        if not is_valid_q:
+            return Response({'detail': 'Question does not belong to this examination.'}, status=status.HTTP_400_BAD_REQUEST)
 
         defaults = {'selected_option': selected_option}
         if answer_text_provided:

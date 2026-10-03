@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { adminQuestionApi, AdminQuestion } from '@/lib/api/admin-questions';
 import { adminCollectionsApi, QuestionCollection } from '@/lib/api/admin-collections';
 import { adminApi, AdminTag } from '@/lib/api/admin';
-import { Save, FileText, Wand2 } from 'lucide-react';
+import { publicApi, PublicCourse } from '@/lib/api/public-api';
+import { Save, FileText, Wand2, BookOpen } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AcademicDependentSelect } from '@/components/admin/syllabus/AcademicDependentSelect';
 import { Button } from '@/components/ui/button';
@@ -55,12 +56,20 @@ export function SingleQuestionForm({ initialData, onSaveSuccess }: { initialData
   });
   const [correctOption, setCorrectOption] = useState<'A'|'B'|'C'|'D'|''>(initialData?.correct_option || '');
 
-  // Syllabus Cascading
+  // Course & Syllabus Cascading
+  const [courses, setCourses] = useState<PublicCourse[]>([]);
+  const [selCourse, setSelCourse] = useState(initialData?.course_id ? String(initialData.course_id) : '');
   const [selCategory, setSelCategory] = useState(initialData?.category_id || '');
   const [selPosition, setSelPosition] = useState(initialData?.position_id || '');
   const [selSubject, setSelSubject] = useState(initialData?.subject_id || '');
   const [selChapter, setSelChapter] = useState(initialData?.chapter_id || '');
   const [selTopic, setSelTopic] = useState(initialData?.topic || '');
+
+  useEffect(() => {
+    publicApi.getCourses()
+      .then(res => setCourses(res || []))
+      .catch(() => setCourses([]));
+  }, []);
 
   // Add to Collection (Optional) - a question can belong to zero, one, or
   // several reusable QuestionCollections. Loaded from the real backend list,
@@ -99,6 +108,21 @@ export function SingleQuestionForm({ initialData, onSaveSuccess }: { initialData
   };
   const selectableTags = tags.filter(t => t.is_active || selectedTagIds.includes(t.id));
 
+  const handleCourseChange = (courseId: string) => {
+    setSelCourse(courseId);
+    if (!courseId) return;
+    const course = courses.find(c => String(c.id) === String(courseId));
+    if (course?.exam) {
+      if (course.exam.category_id) {
+        setSelCategory(course.exam.category_id);
+      }
+      setSelPosition(course.exam.id);
+      setSelSubject('');
+      setSelChapter('');
+      setSelTopic('');
+    }
+  };
+
   const handleAcademicChange = (field: string, value: any) => {
     if (field === 'category') {
       setSelCategory(value || '');
@@ -106,11 +130,23 @@ export function SingleQuestionForm({ initialData, onSaveSuccess }: { initialData
       setSelSubject('');
       setSelChapter('');
       setSelTopic('');
+      if (selCourse) {
+        const currentCourse = courses.find(c => String(c.id) === String(selCourse));
+        if (currentCourse?.exam?.category_id && String(currentCourse.exam.category_id) !== String(value)) {
+          setSelCourse('');
+        }
+      }
     } else if (field === 'position' || field === 'exam') {
       setSelPosition(value || '');
       setSelSubject('');
       setSelChapter('');
       setSelTopic('');
+      const matchingCourse = courses.find(c => c.exam && String(c.exam.id) === String(value));
+      if (matchingCourse) {
+        setSelCourse(String(matchingCourse.id));
+      } else {
+        setSelCourse('');
+      }
     } else if (field === 'subject') {
       setSelSubject(value || '');
       setSelChapter('');
@@ -146,6 +182,7 @@ export function SingleQuestionForm({ initialData, onSaveSuccess }: { initialData
       const payload: Partial<AdminQuestion> = {
         question_type: 'mcq',
         status,
+        course: selCourse ? Number(selCourse) : undefined,
         category: Number(selCategory),
         position: Number(selPosition),
         subject: selSubject ? Number(selSubject) : undefined,
@@ -225,21 +262,6 @@ export function SingleQuestionForm({ initialData, onSaveSuccess }: { initialData
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Marks</label>
-            <input type="number" step="0.5" value={marks} onChange={e => setMarks(Number(e.target.value))} className="w-full border border-gray-200 rounded-lg px-3 py-2" required />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Negative Marks</label>
-            <input type="number" step="0.1" value={negativeMarks} onChange={e => setNegativeMarks(Number(e.target.value))} className="w-full border border-gray-200 rounded-lg px-3 py-2" required />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Expected Time (min)</label>
-            <input type="number" value={expectedTime} onChange={e => setExpectedTime(Number(e.target.value))} className="w-full border border-gray-200 rounded-lg px-3 py-2" required />
-          </div>
-        </div>
-
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Add to Collection (Optional)</label>
           {collections.length === 0 ? (
@@ -302,11 +324,33 @@ export function SingleQuestionForm({ initialData, onSaveSuccess }: { initialData
       {/* Syllabus Selection */}
       <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm space-y-4">
         <h2 className="text-lg font-semibold flex items-center gap-2">
-          Syllabus Mapping
+          <BookOpen className="w-5 h-5 text-[#0B2545]" />
+          Course &amp; Academic Scope Mapping
         </h2>
-        <p className="text-sm text-gray-500 mb-4">
-          Category and Position/Level are required. Subject, Chapter, and Topic are optional.
+        <p className="text-sm text-gray-500 mb-2">
+          Questions intended for student practice must map to an active Course. Select a Course to automatically configure the matching Exam/Position scope, or select the academic hierarchy manually.
         </p>
+
+        <div className="p-4 bg-navy-50/50 border border-navy-100 rounded-lg space-y-2 mb-4">
+          <label className="block text-sm font-semibold text-navy-950">
+            Target Course (Recommended for Student Practice)
+          </label>
+          <select
+            value={selCourse}
+            onChange={(e) => handleCourseChange(e.target.value)}
+            className="w-full p-2.5 border border-gray-200 bg-white rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0B2545]/20 text-sm font-medium"
+          >
+            <option value="">Select Course (or choose Position manually below)</option>
+            {courses.map(c => (
+              <option key={c.id} value={String(c.id)}>
+                {c.title} {c.exam?.title ? `(${c.exam.title})` : ''}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-navy-700">
+            Selecting a Course scopes academic selectors to its syllabus. Questions with approved status require a valid Course mapping to be served to enrolled students.
+          </p>
+        </div>
         
         <AcademicDependentSelect
           category={selCategory}

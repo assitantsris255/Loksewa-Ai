@@ -6,6 +6,18 @@ from django.dispatch import receiver
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
+class SafeDeleteModel(models.Model):
+    """
+    Abstract base model for recoverable soft-deletion across all
+    core business and academic entities.
+    """
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        abstract = True
+
+
 class User(AbstractUser):
     ROLE_CHOICES = (
         ('student', 'Student'),

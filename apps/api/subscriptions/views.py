@@ -68,21 +68,13 @@ class SubscriptionPlanViewSet(viewsets.ModelViewSet):
             ).count(),
         }
 
-        if any(dependencies.values()):
-            plan.status = 'ARCHIVED'
-            plan.save(update_fields=('status', 'updated_at'))
-            return Response({
-                'deleted': False,
-                'archived': True,
-                'message': 'Package archived because historical records depend on it.',
-                'dependencies': dependencies,
-            }, status=status.HTTP_200_OK)
-
-        plan.delete()
+        from administration.safe_delete_service import SafeDeleteService
+        trash_item = SafeDeleteService.soft_delete(plan, request.user, reason="Deleted by Admin")
         return Response({
-            'deleted': True,
-            'archived': False,
-            'message': 'Package permanently deleted.',
+            'deleted': False,
+            'archived': True,
+            'message': f"Package '{trash_item.title}' has been moved to Trash.",
+            'trash_item_id': trash_item.id,
             'dependencies': dependencies,
         }, status=status.HTTP_200_OK)
 
@@ -146,25 +138,36 @@ class SubscriptionPlanViewSet(viewsets.ModelViewSet):
                 status='active'
             ).values_list('course_id', flat=True))
 
-        all_active_plans = SubscriptionPlan.objects.filter(status='ACTIVE').order_by('display_order')
+        all_active_plans = (
+            SubscriptionPlan.objects.filter(status='ACTIVE')
+            .select_related('course', 'course__exam', 'course__exam__parent', 'course__exam__category')
+            .prefetch_related(
+                'eligible_courses',
+                'eligible_courses__exam',
+                'eligible_courses__exam__parent',
+                'eligible_courses__exam__category',
+            )
+            .order_by('display_order')
+        )
 
         matching_plans = []
         for plan in all_active_plans:
             is_compatible = False
+            eligible_ids = {c.id for c in plan.eligible_courses.all()}
 
             if plan.package_type == 'ALL_ACCESS':
                 is_compatible = True
             elif plan.package_type == 'SINGLE':
                 if plan.course_id and plan.course_id in candidate_course_ids:
                     is_compatible = True
-                elif not plan.course_id and not plan.eligible_courses.exists():
+                elif not plan.course_id and not eligible_ids:
                     is_compatible = True
-                elif plan.eligible_courses.filter(id__in=candidate_course_ids).exists():
+                elif bool(eligible_ids & candidate_course_ids):
                     is_compatible = True
             elif plan.package_type in ('MULTI', 'BUNDLE'):
-                if plan.eligible_courses.filter(id__in=candidate_course_ids).exists():
+                if bool(eligible_ids & candidate_course_ids):
                     is_compatible = True
-                elif not plan.eligible_courses.exists():
+                elif not eligible_ids:
                     is_compatible = True
             else:
                 if plan.course_id in candidate_course_ids or not plan.course_id:
@@ -253,6 +256,7 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
         payment = serializer.save(student=self.request.user, amount=plan.price)
 
         from courses.models import Course, CourseApplication
+        from .models import SubscriptionCourseSelection
         if plan.package_type == 'MULTI':
             for course_id in course_ids:
                 CourseApplication.objects.update_or_create(
@@ -265,6 +269,10 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
                         'reviewed_by': None
                     }
                 )
+                SubscriptionCourseSelection.objects.get_or_create(
+                    payment=payment,
+                    course_id=course_id,
+                )
         elif plan.package_type == 'BUNDLE':
             for course in plan.eligible_courses.all():
                 CourseApplication.objects.update_or_create(
@@ -276,6 +284,10 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
                         'reviewed_at': None,
                         'reviewed_by': None
                     }
+                )
+                SubscriptionCourseSelection.objects.get_or_create(
+                    payment=payment,
+                    course=course,
                 )
         elif plan.package_type == 'SINGLE':
             single_course = plan.course
@@ -294,6 +306,10 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
                         'reviewed_by': None
                     }
                 )
+                SubscriptionCourseSelection.objects.get_or_create(
+                    payment=payment,
+                    course=single_course,
+                )
         elif plan.course:
             CourseApplication.objects.update_or_create(
                 student=self.request.user,
@@ -304,6 +320,10 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
                     'reviewed_at': None,
                     'reviewed_by': None
                 }
+            )
+            SubscriptionCourseSelection.objects.get_or_create(
+                payment=payment,
+                course=plan.course,
             )
 
         from core.notification_service import NotificationService
@@ -371,10 +391,11 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
             payment.subscription = subscription
             payment.save()
 
-            # ── AUTO-ENROLL: activate Enrollment based on CourseApplications ──
+            # ── AUTO-ENROLL & COURSE SELECTIONS ──
             enrolled_course_title = plan.name  # fallback notification text
             try:
                 from courses.models import Enrollment, CourseApplication
+                from .models import SubscriptionCourseSelection
                 
                 applications = CourseApplication.objects.filter(subscription_payment=payment)
                 
@@ -388,7 +409,6 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
                         }
                     )
                     if not created:
-                        # Reactivate if previously cancelled/suspended
                         enrollment.status = 'active'
                         enrollment.expires_at = expiry_date
                         enrollment.save(update_fields=['status', 'expires_at'])
@@ -412,19 +432,62 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
                         enrollment.expires_at = expiry_date
                         enrollment.save(update_fields=['status', 'expires_at'])
                     enrolled_course_title = plan.course.title
+                elif plan.package_type == 'BUNDLE':
+                    for c in plan.eligible_courses.all():
+                        enrollment, created = Enrollment.objects.get_or_create(
+                            student=payment.student,
+                            course=c,
+                            defaults={
+                                'status': 'active',
+                                'expires_at': expiry_date,
+                            }
+                        )
+                        if not created:
+                            enrollment.status = 'active'
+                            enrollment.expires_at = expiry_date
+                            enrollment.save(update_fields=['status', 'expires_at'])
                 elif applications.exists():
                     if applications.count() == 1:
                         enrolled_course_title = applications.first().course.title
                     else:
                         enrolled_course_title = f"{applications.count()} Preparations"
+
+                # Link or create SubscriptionCourseSelection records
+                selections = SubscriptionCourseSelection.objects.filter(payment=payment)
+                for sel in selections:
+                    if not sel.subscription:
+                        sel.subscription = subscription
+                        sel.save(update_fields=['subscription'])
+
+                if not selections.exists():
+                    for app in applications:
+                        SubscriptionCourseSelection.objects.get_or_create(
+                            subscription=subscription,
+                            course=app.course,
+                            defaults={'payment': payment}
+                        )
+                    if plan.course:
+                        SubscriptionCourseSelection.objects.get_or_create(
+                            subscription=subscription,
+                            course=plan.course,
+                            defaults={'payment': payment}
+                        )
+                    elif plan.package_type == 'BUNDLE':
+                        for c in plan.eligible_courses.all():
+                            SubscriptionCourseSelection.objects.get_or_create(
+                                subscription=subscription,
+                                course=c,
+                                defaults={'payment': payment}
+                            )
+
+                from courses.access import invalidate_student_course_context
+                invalidate_student_course_context(payment.student_id)
             except Exception:
-                # Deliberately not re-raised: a bug in the auto-enroll
-                # step shouldn't block the payment approval itself, but
-                # it must not fail silently either.
                 logger.exception(
                     "Auto-enroll failed for payment_id=%s student_id=%s",
                     payment.id, payment.student_id,
                 )
+
 
             # Create invoice
             Invoice.objects.create(

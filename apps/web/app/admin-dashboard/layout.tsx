@@ -45,6 +45,9 @@ import {
   Package,
   Bookmark,
   Loader2,
+  Trash2,
+  ArchiveRestore,
+  HardDrive,
 } from "lucide-react";
 
 // ===== Sidebar Nav Config =====
@@ -115,6 +118,15 @@ const SIDEBAR_NAV: NavSection[] = [
       { title: "Packages", href: "/admin-dashboard/packages", icon: Package },
       { title: "Evaluations", href: "/admin-dashboard/evaluations", icon: ClipboardCheck },
       { title: "Games", href: "/admin-dashboard/games", icon: Gamepad2 },
+    ],
+  },
+  {
+    title: "Data Safety",
+    items: [
+      { title: "Safety Overview", href: "/admin-dashboard/data-safety", icon: ShieldAlert as any, exact: true },
+      { title: "Trash / Recycle Bin", href: "/admin-dashboard/data-safety/trash", icon: Trash2 as any },
+      { title: "Database Backups", href: "/admin-dashboard/data-safety/backups", icon: HardDrive as any },
+      { title: "Emergency Recovery", href: "/admin-dashboard/data-safety/recovery", icon: ArchiveRestore as any },
     ],
   },
   {

@@ -185,7 +185,7 @@ async function executeRequest<T>(
     if (response.status === 403 && errorData?.code === 'subscription_required' && !options.skipRedirect) {
       if (typeof window !== "undefined") {
         const path = window.location.pathname;
-        if (path !== "/student") {
+        if (path !== "/student" && !path.startsWith("/student/onboarding") && !path.startsWith("/student/plans")) {
           window.location.href = "/student";
           return new Promise(() => {}); // Prevent further execution
         }

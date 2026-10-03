@@ -1,4 +1,4 @@
-from rest_framework import viewsets, filters
+from rest_framework import viewsets, filters, status
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -7,6 +7,7 @@ from django.db.models import Count, F
 from exams.models import Question
 from rest_framework.pagination import PageNumberPagination
 from .question_serializers import AdminQuestionSerializer
+from .safe_delete_service import SafeDeleteService
 
 
 class QuestionBankPagination(PageNumberPagination):
@@ -71,6 +72,16 @@ class AdminQuestionViewSet(viewsets.ModelViewSet):
     ]
     ordering_fields = ['created_at', 'marks', 'difficulty']
 
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        reason = request.data.get('reason', '') if isinstance(request.data, dict) else ''
+        trash_item = SafeDeleteService.soft_delete(instance, request.user, reason=reason)
+        return Response({
+            'success': True,
+            'message': f"Question '{trash_item.title}' has been moved to Trash.",
+            'trash_item_id': trash_item.id,
+        }, status=status.HTTP_200_OK)
+
     def get_queryset(self):
         # Multi-tag filter: matches ANY of the selected tags, per the product
         # convention documented on the frontend Tag filter dropdown.
@@ -83,6 +94,27 @@ class AdminQuestionViewSet(viewsets.ModelViewSet):
             tag_ids = [int(v) for v in raw_ids.split(',') if v.strip().isdigit()]
             if tag_ids:
                 qs = qs.filter(tag_objects__id__in=tag_ids).distinct()
+
+        # Authoritative mapping filter: all | mapped | needs_mapping | incomplete | unassigned | invalid
+        mapping = self.request.query_params.get('mapping')
+        if mapping:
+            from courses.services.course_access_service import CourseAccessService
+            qs = CourseAccessService.filter_admin_questions_by_mapping(qs, mapping)
+
+        course_param = self.request.query_params.get('course')
+        if course_param:
+            from courses.models import Course
+            from courses.services.course_access_service import CourseAccessService
+            c_obj = Course.objects.filter(id=course_param).first()
+            if c_obj:
+                c_exam_ids = list(CourseAccessService.get_course_exam_ids(c_obj))
+                qs = qs.filter(
+                    Q(exam_id__in=c_exam_ids) |
+                    Q(subject__paper__exam_id__in=c_exam_ids) |
+                    Q(chapter__subject__paper__exam_id__in=c_exam_ids) |
+                    Q(topic__chapter__subject__paper__exam_id__in=c_exam_ids)
+                )
+
         return qs
 
     def perform_create(self, serializer):
@@ -102,10 +134,16 @@ class AdminQuestionViewSet(viewsets.ModelViewSet):
         draft_count = qs.filter(status='draft').count()
         ai_pending_count = qs.filter(ai_status='pending').count()
         
+        # Mapping breakdown
+        from courses.services.course_access_service import CourseAccessService
+        mapped_count = CourseAccessService.filter_admin_questions_by_mapping(qs, 'mapped').count()
+        needs_mapping_count = CourseAccessService.filter_admin_questions_by_mapping(qs, 'needs_mapping').count()
+        incomplete_count = CourseAccessService.filter_admin_questions_by_mapping(qs, 'incomplete').count()
+        unassigned_count = CourseAccessService.filter_admin_questions_by_mapping(qs, 'unassigned').count()
+        invalid_count = CourseAccessService.filter_admin_questions_by_mapping(qs, 'invalid').count()
+
         # Difficulty breakdown
         difficulty_counts = list(qs.values('difficulty').annotate(count=Count('id')))
-        
-        # Collections stats could be fetched via Collection API
         
         return Response({
             'total': total,
@@ -114,6 +152,11 @@ class AdminQuestionViewSet(viewsets.ModelViewSet):
             'active': active_count,
             'draft': draft_count,
             'ai_pending': ai_pending_count,
+            'mapped': mapped_count,
+            'needs_mapping': needs_mapping_count,
+            'incomplete': incomplete_count,
+            'unassigned': unassigned_count,
+            'invalid': invalid_count,
             'by_difficulty': difficulty_counts
         })
 
@@ -222,6 +265,100 @@ class AdminQuestionViewSet(viewsets.ModelViewSet):
                 actor=request.user, action=f'BULK_{action_type.upper()}', entity_type='Question', entity_id=None,
                 details={"ids": ids, "count": count, "tag_ids": tag_ids}
             )
+        elif action_type == 'map_academic':
+            from courses.models import Course
+            from exams.models import Exam, Subject, Chapter, Topic
+            from courses.services.course_access_service import CourseAccessService
+            from django.db import transaction
+
+            course_id = request.data.get('course_id')
+            exam_id = request.data.get('exam_id')
+            subject_id = request.data.get('subject_id')
+            chapter_id = request.data.get('chapter_id')
+            topic_id = request.data.get('topic_id')
+
+            course = None
+            if course_id:
+                course = Course.objects.filter(id=course_id).first()
+                if not course:
+                    return Response({"error": "Selected course does not exist."}, status=400)
+                if not exam_id and course.exam_id:
+                    exam_id = course.exam_id
+
+            exam = None
+            if exam_id:
+                exam = Exam.objects.filter(id=exam_id).first()
+                if not exam:
+                    return Response({"error": "Selected level/position does not exist."}, status=400)
+
+            if course and exam:
+                course_exam_ids = CourseAccessService.get_course_exam_ids(course)
+                if exam.id not in course_exam_ids:
+                    return Response({"error": f"Level/Position '{exam.name}' does not belong to course '{course.title}'."}, status=400)
+
+            subject = None
+            if subject_id:
+                subject = Subject.objects.filter(id=subject_id).select_related('paper__exam').first()
+                if not subject:
+                    return Response({"error": "Selected subject does not exist."}, status=400)
+                if exam:
+                    sub_exam_id = subject.paper.exam_id if (subject.paper_id and subject.paper) else None
+                    if sub_exam_id != exam.id and getattr(subject.paper.exam, 'parent_id', None) != exam.id:
+                        return Response({"error": f"Subject '{subject.name}' does not belong to level/position '{exam.name}'."}, status=400)
+
+            chapter = None
+            if chapter_id:
+                chapter = Chapter.objects.filter(id=chapter_id).first()
+                if not chapter:
+                    return Response({"error": "Selected chapter does not exist."}, status=400)
+                if subject and chapter.subject_id != subject.id:
+                    return Response({"error": f"Chapter '{chapter.title}' does not belong to subject '{subject.name}'."}, status=400)
+
+            topic = None
+            if topic_id:
+                topic = Topic.objects.filter(id=topic_id).first()
+                if not topic:
+                    return Response({"error": "Selected topic does not exist."}, status=400)
+                if chapter and topic.chapter_id != chapter.id:
+                    return Response({"error": f"Topic '{topic.name}' does not belong to chapter '{chapter.title}'."}, status=400)
+
+            category_id = exam.category_id if exam else (exam.parent.category_id if (exam and exam.parent) else None)
+
+            update_fields = {}
+            if exam:
+                update_fields['exam'] = exam
+            if category_id:
+                update_fields['category_id'] = category_id
+            if subject_id is not None:
+                update_fields['subject'] = subject
+            if chapter_id is not None:
+                update_fields['chapter'] = chapter
+            if topic_id is not None:
+                update_fields['topic'] = topic
+
+            if not update_fields:
+                return Response({"error": "No academic mapping provided to apply."}, status=400)
+
+            with transaction.atomic():
+                questions.update(**update_fields)
+
+            AuditLog.objects.create(
+                actor=request.user, action='BULK_MAP_ACADEMIC', entity_type='Question', entity_id=None,
+                details={
+                    "ids": ids,
+                    "count": count,
+                    "course_id": course_id,
+                    "exam_id": exam_id,
+                    "subject_id": subject_id,
+                    "chapter_id": chapter_id,
+                    "topic_id": topic_id,
+                }
+            )
+            return Response({
+                "success": True,
+                "count": count,
+                "message": f"Successfully mapped {count} questions to academic scope."
+            })
         else:
             return Response({"error": "Invalid action"}, status=400)
             

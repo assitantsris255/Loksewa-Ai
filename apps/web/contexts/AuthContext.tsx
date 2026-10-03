@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { User, authApi } from "../lib/api/auth";
+import { getAuthToken } from "../lib/api/client";
 
 interface AuthContextType {
   user: User | null;
@@ -54,6 +55,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       purgeOnIdentityChange(fresh?.id ?? null);
       return fresh;
     },
+    enabled: typeof window !== "undefined" ? !!getAuthToken() : false,
     staleTime: 60 * 1000,
   });
 

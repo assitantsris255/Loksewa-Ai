@@ -19,6 +19,19 @@ from core import google_drive
 
 @xframe_options_exempt
 def drive_media_proxy(request, file_id):
+    from notes.models import StudyMaterial
+    from exams.models import Examination, SubjectiveSubmission
+    from django.http import HttpResponseForbidden
+
+    # Reject unauthenticated/direct proxy access for protected course resources
+    is_protected = (
+        StudyMaterial.objects.filter(file__contains=file_id).exists() or
+        Examination.objects.filter(question_paper_pdf__contains=file_id).exists() or
+        SubjectiveSubmission.objects.filter(answer_pdf__contains=file_id).exists()
+    )
+    if is_protected:
+        return HttpResponseForbidden("Direct access to protected materials via Drive proxy is forbidden. Please access files via the authorized download API.")
+
     try:
         meta = google_drive.get_file(file_id)
     except google_drive.GoogleDriveError:

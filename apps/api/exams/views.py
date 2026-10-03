@@ -217,6 +217,12 @@ class SubjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = Subject.objects.all()
+        user = self.request.user
+        if user and user.is_authenticated and getattr(user, 'role', None) == 'student':
+            from courses.services.course_access_service import CourseAccessService
+            scope = CourseAccessService.get_accessible_academic_scope(user)
+            if not scope['is_unrestricted']:
+                queryset = queryset.filter(id__in=scope['subject_ids'])
         # Subject has no direct `exam` FK - it reaches Exam through Paper.
         exam_id = self.request.query_params.get('exam')
         if exam_id:
@@ -229,18 +235,25 @@ class TopicViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = TopicSerializer
     filterset_fields = ['subject']
 
+    def get_queryset(self):
+        queryset = Topic.objects.all()
+        user = self.request.user
+        if user and user.is_authenticated and getattr(user, 'role', None) == 'student':
+            from courses.services.course_access_service import CourseAccessService
+            scope = CourseAccessService.get_accessible_academic_scope(user)
+            if not scope['is_unrestricted']:
+                queryset = queryset.filter(id__in=scope['topic_ids'])
+        return queryset
+
     @action(detail=True, methods=['get'])
     def content(self, request, pk=None):
         topic = self.get_object()
         from notes.models import StudyMaterial
         from notes.serializers import StudyMaterialDetailSerializer, with_student_state
-        from courses.models import Enrollment
-        from django.db.models import Q
+        from courses.services.course_access_service import CourseAccessService
         
-        # Enforce Enrollment Access Control for materials
-        active_courses = Enrollment.objects.filter(student=request.user, status='active').values_list('course_id', flat=True)
         materials = StudyMaterial.objects.filter(topic=topic, status='published')
-        materials = materials.filter(Q(course__isnull=True) | Q(course_id__in=active_courses))
+        materials = CourseAccessService.filter_notes_queryset(request.user, materials)
         materials = with_student_state(
             materials.select_related('subject', 'chapter', 'topic', 'course', 'exam', 'exam__parent', 'exam__category'),
             request.user)
@@ -262,9 +275,6 @@ class QuestionViewSet(viewsets.ReadOnlyModelViewSet):
     has no teacher/admin ownership scoping, so it must never return
     draft/pending/rejected questions or answer keys.
     """
-    # Class-level `queryset` is kept only so DRF's router can infer a
-    # basename/schema; every actual request is served by get_queryset()
-    # below, which is the one that enforces the approval filter.
     queryset = Question.objects.all()
     serializer_class = SecureQuestionSerializer
     filterset_fields = ['topic', 'difficulty']
@@ -285,6 +295,11 @@ class QuestionViewSet(viewsets.ReadOnlyModelViewSet):
 
         difficulty_distribution = {difficulty: limit} if difficulty and difficulty != 'all' else None
 
+        from courses.access import authorized_exam_ids
+        scope = authorized_exam_ids(request.user)
+        if scope is not None and not scope:
+            return Response([])
+
         # Use the centralized selection service — approved questions only.
         service = QuestionSelectionService()
         result = service.select(
@@ -292,10 +307,12 @@ class QuestionViewSet(viewsets.ReadOnlyModelViewSet):
             count=limit,
             difficulty_distribution=difficulty_distribution,
             randomize=True,
-            question_type='objective',  # MCQ practice UI: never written-answer questions
+            question_type='objective',
+            exam_ids=scope,
         )
         serializer = self.get_serializer(result['questions'], many=True)
         return Response(serializer.data)
+
 
 # Topic-wise practice shows a fixed page of questions at a time (default 20).
 STUDY_PAGE_SIZES = (10, 20)
@@ -1733,8 +1750,19 @@ class SubjectiveQuestionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = SubjectiveQuestionSerializer
 
     def get_queryset(self):
-        # Security: only approved questions are student-facing
+        # Security: only approved questions are student-facing, strictly scoped to authorized exams
+        from courses.access import authorized_exam_ids
         qs = self.Question.objects.filter(status='approved', question_type__in=self.Question.SUBJECTIVE_TYPES)
+        scope = authorized_exam_ids(self.request.user)
+        if scope is not None:
+            if not scope:
+                return qs.none()
+            qs = qs.filter(
+                Q(exam_id__in=list(scope)) |
+                Q(subject__paper__exam_id__in=list(scope)) |
+                Q(chapter__subject__paper__exam_id__in=list(scope)) |
+                Q(topic__chapter__subject__paper__exam_id__in=list(scope))
+            )
         topic_id = self.request.query_params.get('topic')
         if topic_id:
             qs = qs.filter(topic_id=topic_id)
@@ -1816,19 +1844,32 @@ class SubjectiveAttemptViewSet(viewsets.ModelViewSet):
                 SubjectiveAnswer.objects.create(attempt=attempt, question=q)
 
         elif mode == 'topic' and question_ids:
+            allowed_exams = authorized_exam_ids(request.user)
+            valid_questions = Question.objects.filter(
+                id__in=question_ids, status='approved', question_type__in=Question.SUBJECTIVE_TYPES
+            )
+            if allowed_exams is not None:
+                if not allowed_exams:
+                    return Response({'detail': 'You are not enrolled in any course with access to these questions.'}, status=403)
+                valid_questions = valid_questions.filter(
+                    Q(exam_id__in=list(allowed_exams)) |
+                    Q(subject__paper__exam_id__in=list(allowed_exams)) |
+                    Q(chapter__subject__paper__exam_id__in=list(allowed_exams)) |
+                    Q(topic__chapter__subject__paper__exam_id__in=list(allowed_exams))
+                )
+            if not valid_questions.exists():
+                return Response({'detail': 'None of the requested questions are accessible in your enrolled courses.'}, status=403)
+
             attempt = SubjectiveAttempt.objects.create(
                 student=request.user, mode='topic'
             )
-            for qid in question_ids:
-                try:
-                    q = Question.objects.get(id=qid, status='approved', question_type__in=Question.SUBJECTIVE_TYPES)
-                    SubjectiveAnswer.objects.create(attempt=attempt, question=q)
-                except Question.DoesNotExist:
-                    pass
+            for q in valid_questions:
+                SubjectiveAnswer.objects.create(attempt=attempt, question=q)
         else:
             return Response({'detail': 'Invalid attempt configuration.'}, status=400)
 
         return Response(self.get_serializer(attempt).data, status=201)
+
 
     @action(detail=True, methods=['post'])
     def save_draft(self, request, pk=None):

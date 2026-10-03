@@ -481,18 +481,23 @@ class MyCoursesListView(APIView):
 
     def get(self, request):
         user = request.user
-        enrollments = Enrollment.objects.filter(
-            student=user, status='active'
-        ).select_related('course', 'course__exam')
+        from courses.services.course_access_service import CourseAccessService
+        from exams.models import UserTopicProgress, Topic
+        from .models import Enrollment
 
-        from exams.models import UserTopicProgress
+        auth_courses = CourseAccessService.get_accessible_courses(user).select_related('exam')
+
         # Bulk fetch all user's topic progress to avoid N+1
         all_progress = UserTopicProgress.objects.filter(user=user, status='completed').values_list('topic_id', flat=True)
         completed_topic_ids = set(all_progress)
 
+        enrollments_by_course = {
+            e.course_id: e for e in Enrollment.objects.filter(student=user, status='active')
+        }
+
         data = []
-        for en in enrollments:
-            course = en.course
+        for course in auth_courses:
+            en = enrollments_by_course.get(course.id)
             thumbnail_url = None
             if course.thumbnail:
                 try:
@@ -501,11 +506,9 @@ class MyCoursesListView(APIView):
                     pass
 
             # Calculate progress
-            # Get all topics for the course's exam hierarchy
             total_topics = 0
             completed_in_course = 0
             if course.exam:
-                from exams.models import Topic
                 topics = Topic.objects.filter(chapter__subject__paper__exam=course.exam)
                 total_topics = topics.count()
                 topic_ids = set(topics.values_list('id', flat=True))
@@ -516,9 +519,9 @@ class MyCoursesListView(APIView):
                 progress_percentage = int((completed_in_course / total_topics) * 100)
 
             data.append({
-                'enrollment_id': en.id,
-                'enrolled_at': en.enrolled_at,
-                'expires_at': en.expires_at,
+                'enrollment_id': en.id if en else course.id,
+                'enrolled_at': en.enrolled_at if en else course.created_at,
+                'expires_at': en.expires_at if en else None,
                 'course': {
                     'id': course.id,
                     'title': course.title,
@@ -534,36 +537,8 @@ class MyCoursesListView(APIView):
                 }
             })
 
-        # Add course from active subscription if not already included
-        from subscriptions.models import Subscription
-        active_sub = Subscription.objects.filter(student=user, status='ACTIVE').first()
-        if active_sub and active_sub.plan:
-            # Check if this course is already in data
-            enrolled_course_ids = [item['course']['id'] for item in data]
-            
-            # The subscription plan acts as a course wrapper for analytics/display
-            # We map the plan to a dummy course object for display purposes
-            if not data and active_sub.plan.id not in enrolled_course_ids:
-                data.append({
-                    'enrollment_id': -active_sub.id,
-                    'enrolled_at': active_sub.created_at,
-                    'expires_at': active_sub.expiry_date,
-                    'course': {
-                        'id': active_sub.plan.id,
-                        'title': active_sub.plan.name,
-                        'slug': f"plan-{active_sub.plan.id}",
-                        'short_description': active_sub.plan.description or "Your active subscription plan",
-                        'thumbnail': None,
-                        'exam': None,
-                    },
-                    'progress': {
-                        'total_topics': 0,
-                        'completed_topics': 0,
-                        'percentage': 0
-                    }
-                })
-
         return Response(data)
+
 
 
 class CourseDetailView(APIView):

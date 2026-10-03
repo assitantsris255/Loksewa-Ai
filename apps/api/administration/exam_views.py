@@ -30,6 +30,7 @@ from .examination_question_views import ExaminationQuestionMixin
 # IsAdminUser instead. Using the DRF one 403'd every admin whose account
 # wasn't separately flagged is_staff, silently blocking exam creation.
 from .permissions import IsAdminUser, IsEvaluatorUser
+from .safe_delete_service import SafeDeleteService
 
 
 from rest_framework.pagination import PageNumberPagination
@@ -120,6 +121,16 @@ class SubjectiveQuestionSetViewSet(viewsets.ModelViewSet):
     }
     ordering_fields = ['created_at', 'total_marks', 'duration_minutes', 'title']
 
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        reason = request.data.get('reason', '') if isinstance(request.data, dict) else ''
+        trash_item = SafeDeleteService.soft_delete(instance, request.user, reason=reason)
+        return Response({
+            'success': True,
+            'message': f"Subjective Question Set '{trash_item.title}' has been moved to Trash.",
+            'trash_item_id': trash_item.id,
+        }, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=['post'], url_path='archive')
     def archive(self, request, pk=None):
         instance = self.get_object()
@@ -167,6 +178,16 @@ class ExaminationViewSet(ExaminationQuestionMixin, viewsets.ModelViewSet):
     queryset = Examination.objects.all().select_related('category', 'exam', 'subject', 'topic', 'question_set').order_by('-created_at')
     serializer_class = ExaminationSerializer
     permission_classes = [IsAdminUser]
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        reason = request.data.get('reason', '') if isinstance(request.data, dict) else ''
+        trash_item = SafeDeleteService.soft_delete(instance, request.user, reason=reason)
+        return Response({
+            'success': True,
+            'message': f"Examination '{trash_item.title}' has been moved to Trash.",
+            'trash_item_id': trash_item.id,
+        }, status=status.HTTP_200_OK)
 
     def perform_create(self, serializer):
         from rest_framework.exceptions import ValidationError

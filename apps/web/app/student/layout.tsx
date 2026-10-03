@@ -28,22 +28,27 @@ function StudentLayoutContent({ children }: { children: React.ReactNode }) {
     !subscription.hasActivePackage &&
     subscription.latestPayment?.status !== "PENDING";
 
+  const isExemptPath =
+    pathname === "/student" ||
+    pathname.startsWith("/student/settings") ||
+    pathname.startsWith("/student/help-support") ||
+    pathname.startsWith("/student/purchases") ||
+    pathname.startsWith("/student/packages") ||
+    pathname.startsWith("/student/plans") ||
+    pathname.startsWith("/student/checkout") ||
+    pathname.startsWith("/student/onboarding");
+
   useEffect(() => {
-    if (
-      pathname === "/student" ||
-      pathname.startsWith("/student/onboarding") ||
-      pathname.startsWith("/student/checkout") ||
-      pathname.startsWith("/student/plans")
-    ) {
+    if (isExemptPath) {
       return;
     }
 
     if (isLocked) {
       router.replace("/student");
     }
-  }, [pathname, isLocked, router]);
+  }, [pathname, isLocked, isExemptPath, router]);
 
-  if (isLocked && pathname !== "/student" && !pathname.startsWith("/student/plans") && !pathname.startsWith("/student/checkout") && !pathname.startsWith("/student/onboarding")) {
+  if (isLocked && !isExemptPath) {
     return <div className="min-h-screen bg-muted/20" />;
   }
 

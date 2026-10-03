@@ -49,17 +49,36 @@ class QuestionSelectionService:
     APPROVED_STATUS = "approved"
 
     def get_base_queryset(self) -> QuerySet:
-        """Returns the base queryset of all approved questions."""
+        """Returns the base queryset of all approved questions mapped to courses."""
         from .models import Question
-        return Question.objects.filter(status=self.APPROVED_STATUS).select_related(
+        from courses.services.course_access_service import CourseAccessService
+
+        all_course_exam_ids = list(CourseAccessService.get_all_course_exam_ids())
+        qs = Question.objects.filter(status=self.APPROVED_STATUS).select_related(
             "topic", "topic__chapter", "topic__chapter__subject",
             "topic__chapter__subject__paper", "topic__chapter__subject__paper__exam"
         )
+        academic_mapped = (
+            Q(subject_id__isnull=False) |
+            Q(topic_id__isnull=False) |
+            Q(chapter_id__isnull=False)
+        )
+        if all_course_exam_ids:
+            qs = qs.filter(academic_mapped).filter(
+                Q(exam_id__in=all_course_exam_ids) |
+                Q(subject__paper__exam_id__in=all_course_exam_ids) |
+                Q(chapter__subject__paper__exam_id__in=all_course_exam_ids) |
+                Q(topic__chapter__subject__paper__exam_id__in=all_course_exam_ids)
+            )
+        else:
+            return qs.none()
+        return qs
 
     def apply_filters(
         self,
         qs: QuerySet,
         *,
+        course_id: Optional[int] = None,
         exam_id: Optional[int] = None,
         paper_id: Optional[int] = None,
         subject_id: Optional[int] = None,
@@ -84,10 +103,34 @@ class QuestionSelectionService:
         with `exam_id` (both must hold), so a caller can never widen access by
         also passing a specific exam.
         """
+        if course_id:
+            from courses.models import Course
+            from courses.services.course_access_service import CourseAccessService
+            course = Course.objects.filter(id=course_id).first()
+            if course:
+                c_exam_ids = list(CourseAccessService.get_course_exam_ids(course))
+                if c_exam_ids:
+                    academic_mapped = (
+                        Q(subject_id__isnull=False) |
+                        Q(topic_id__isnull=False) |
+                        Q(chapter_id__isnull=False)
+                    )
+                    qs = qs.filter(academic_mapped).filter(
+                        Q(exam_id__in=c_exam_ids) |
+                        Q(subject__paper__exam_id__in=c_exam_ids) |
+                        Q(chapter__subject__paper__exam_id__in=c_exam_ids) |
+                        Q(topic__chapter__subject__paper__exam_id__in=c_exam_ids)
+                    )
+                else:
+                    return qs.none()
+            else:
+                return qs.none()
+
         if exam_ids is not None:
             qs = qs.filter(
                 Q(exam_id__in=list(exam_ids)) |
                 Q(subject__paper__exam_id__in=list(exam_ids)) |
+                Q(chapter__subject__paper__exam_id__in=list(exam_ids)) |
                 Q(topic__chapter__subject__paper__exam_id__in=list(exam_ids))
             )
         if exam_id:
@@ -156,6 +199,7 @@ class QuestionSelectionService:
     def check_availability(
         self,
         *,
+        course_id=None,
         exam_id=None,
         exam_ids=None,
         paper_id=None,
@@ -186,6 +230,7 @@ class QuestionSelectionService:
         """
         qs = self.apply_filters(
             self.get_base_queryset(),
+            course_id=course_id,
             exam_id=exam_id,
             exam_ids=exam_ids,
             paper_id=paper_id,
@@ -229,6 +274,7 @@ class QuestionSelectionService:
         self,
         *,
         # Academic hierarchy filters
+        course_id=None,
         exam_id=None,
         paper_id=None,
         subject_id=None,
@@ -256,6 +302,7 @@ class QuestionSelectionService:
         Select approved questions from the Master Question Bank.
 
         Args:
+            course_id: Filter by course (Loksewa preparation course)
             exam_id: Filter by exam (Loksewa level)
             paper_id: Filter by paper
             subject_id: Filter by subject
@@ -297,6 +344,7 @@ class QuestionSelectionService:
 
         base_qs = self.apply_filters(
             self.get_base_queryset(),
+            course_id=course_id,
             exam_id=exam_id,
             paper_id=paper_id,
             subject_id=subject_id,

@@ -711,11 +711,21 @@ class StudentDashboardView(APIView):
         }
 
         try:
-            cache.set(cache_key, data, 20)
+            cache.set(cache_key, data, 45)
         except Exception:
             pass
 
         return Response(data)
+
+
+def invalidate_package_status(user_id):
+    if not user_id:
+        return
+    from django.core.cache import cache
+    try:
+        cache.delete(f'pkg_status:{user_id}')
+    except Exception:
+        pass
 
 
 def _get_package_status(user):
@@ -724,7 +734,31 @@ def _get_package_status(user):
     latter (a lightweight navigation-guard check - see student/layout.tsx)
     never has to pull in the full dashboard's profile/stats/activity
     computation just to read a couple of package-lock booleans.
+    Fast locmem cache with 30s TTL collapses duplicate queries from login,
+    context, and dashboard requests.
     """
+    if not user or not user.is_authenticated:
+        from .models import AdminSettings
+        return {
+            "enforcementEnabled": AdminSettings.get_settings().enforce_subscription_access,
+            "hasActivePackage": False,
+            "isAdminGranted": False,
+            "planName": None,
+            "status": None,
+            "expiryDate": None,
+            "remainingDays": None,
+            "latestPayment": None,
+        }
+
+    from django.core.cache import cache
+    cache_key = f'pkg_status:{user.id}'
+    try:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
+
     from .models import AdminSettings
     from subscriptions.access import get_active_subscription, has_admin_granted_access
     from subscriptions.models import SubscriptionPayment
@@ -745,7 +779,7 @@ def _get_package_status(user):
             "submittedAt": latest_payment.submitted_at.isoformat() if latest_payment.submitted_at else None,
         }
 
-    return {
+    result = {
         "enforcementEnabled": AdminSettings.get_settings().enforce_subscription_access,
         "hasActivePackage": active_subscription is not None or is_admin_granted,
         "isAdminGranted": is_admin_granted,
@@ -755,6 +789,11 @@ def _get_package_status(user):
         "remainingDays": max((active_subscription.expiry_date - timezone.now()).days, 0) if active_subscription else None,
         "latestPayment": latest_payment_data,
     }
+    try:
+        cache.set(cache_key, result, 30)
+    except Exception:
+        pass
+    return result
 
 
 class StudentPackageStatusView(APIView):

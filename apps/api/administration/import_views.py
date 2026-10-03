@@ -146,7 +146,30 @@ class QuestionImportViewSet(viewsets.ModelViewSet):
         if exam and not category and exam.category:
             category = exam.category
 
+        course = None
+        course_id = request.data.get('course') or request.data.get('course_id')
+        if course_id and str(course_id) not in ('null', 'undefined', ''):
+            from courses.models import Course
+            try:
+                course = Course.objects.get(pk=course_id)
+            except (Course.DoesNotExist, ValueError, TypeError):
+                return Response({'error': 'The selected course no longer exists.'}, status=400)
+
         # Academic consistency checks:
+        if course:
+            from courses.services.course_access_service import CourseAccessService
+            course_exam_ids = CourseAccessService.get_course_exam_ids(course)
+            if not exam and course.exam:
+                exam = course.exam
+                if not category and course.exam.category:
+                    category = course.exam.category
+            elif exam and exam.id not in course_exam_ids:
+                return Response({'error': f"Level/Position '{exam.name}' does not belong to course '{course.title}'."}, status=400)
+            if subject:
+                sub_exam_id = subject.paper.exam_id if (subject.paper_id and subject.paper) else None
+                if sub_exam_id and sub_exam_id not in course_exam_ids:
+                    return Response({'error': f"Subject '{subject.name}' does not belong to course '{course.title}'."}, status=400)
+
         if exam and category and exam.category_id != category.id:
             return Response({'error': f"Position/Level '{exam.name}' does not belong to category '{category.name}'."}, status=400)
         if subject and exam:
@@ -357,7 +380,7 @@ class QuestionImportViewSet(viewsets.ModelViewSet):
                 hint=data.get('hint') or '',
                 marks=float(marks_raw) if marks_raw else 1,
                 difficulty=import_record.difficulty or 'medium',
-                status='approved',
+                status='approved' if (import_record.exam_id or import_record.subject_id) else 'draft',
                 created_by=request.user,
             ))
 

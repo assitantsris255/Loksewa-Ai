@@ -92,11 +92,20 @@ from .material_taxonomy_views import (
 )
 
 
+from .data_safety_views import (
+    AdminDataSafetyOverviewView,
+    AdminTrashViewSet,
+    AdminDatabaseBackupViewSet,
+    AdminRecoveryStatusView,
+)
+
 from exams.schedule_views import AdminExamScheduleViewSet
 from core.testimonial_views import AdminTestimonialViewSet
 from core.website_page_views import AdminWebsitePageViewSet
 
 router = DefaultRouter()
+router.register(r'data-safety/trash', AdminTrashViewSet, basename='admin-data-safety-trash')
+router.register(r'data-safety/backups', AdminDatabaseBackupViewSet, basename='admin-data-safety-backups')
 router.register(r'questions', AdminQuestionViewSet, basename='admin-questions')
 router.register(r'questions/import', QuestionImportViewSet, basename='admin-question-import')
 router.register(r'question-sets', QuestionSetViewSet, basename='admin-question-set')
@@ -128,6 +137,8 @@ from .ai_views import AIGenerateOptionsView, AIApproveOptionsView, AIBulkGenerat
 
 urlpatterns = [
     path('dashboard/stats/', AdminDashboardStatsView.as_view(), name='admin-dashboard-stats'),
+    path('data-safety/overview/', AdminDataSafetyOverviewView.as_view(), name='admin-data-safety-overview'),
+    path('data-safety/recovery/', AdminRecoveryStatusView.as_view(), name='admin-data-safety-recovery'),
 
     path('analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),
     path('analytics/export/', AdminAnalyticsExportView.as_view(), name='admin-analytics-export'),

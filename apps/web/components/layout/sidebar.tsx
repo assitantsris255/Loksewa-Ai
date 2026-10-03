@@ -361,20 +361,56 @@ export function Sidebar({ isOpen, setIsOpen, role = "student" }: SidebarProps) {
         </ScrollArea>
 
         <div className="border-t border-[#163E6B] dark:border-border p-4 flex flex-col gap-1">
-          <Link
-            href={`/${role}/settings`}
-            className="flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[13px] font-medium text-slate-300 dark:text-muted-foreground hover:bg-white/5 dark:hover:bg-muted/50 hover:text-white dark:hover:text-foreground transition-colors"
-          >
-            <Settings className="h-4 w-4 text-slate-400 dark:text-muted-foreground" strokeWidth={1.5} />
-            Settings
-          </Link>
-          <Link
-            href={`/${role}/help-support`}
-            className="flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[13px] font-medium text-slate-300 dark:text-muted-foreground hover:bg-white/5 dark:hover:bg-muted/50 hover:text-white dark:hover:text-foreground transition-colors mb-4"
-          >
-            <MessageSquare className="h-4 w-4 text-slate-400 dark:text-muted-foreground" strokeWidth={1.5} />
-            Help & Support
-          </Link>
+          {(() => {
+            const isSettingsActive = pathname === `/${role}/settings` || pathname.startsWith(`/${role}/settings/`);
+            const isHelpActive = pathname === `/${role}/help-support` || pathname.startsWith(`/${role}/help-support/`) || pathname === `/${role}/help` || pathname.startsWith(`/${role}/help/`);
+            return (
+              <>
+                <Link
+                  href={`/${role}/settings`}
+                  onClick={() => setIsOpen(false)}
+                  className={cn(
+                    "flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[13px] font-medium transition-all duration-200",
+                    isSettingsActive 
+                      ? "bg-white/10 text-white dark:bg-primary/10 dark:text-foreground shadow-[inset_2px_0_0_0_#D4A72C]" 
+                      : "text-slate-300 dark:text-muted-foreground hover:bg-white/5 dark:hover:bg-muted/50 hover:text-white dark:hover:text-foreground"
+                  )}
+                >
+                  <Settings 
+                    className={cn(
+                      "h-[18px] w-[18px] transition-all duration-300", 
+                      isSettingsActive 
+                        ? "text-[#D4A72C] drop-shadow-[0_0_8px_rgba(212,167,44,0.5)] scale-110" 
+                        : "text-slate-400 dark:text-muted-foreground group-hover:text-slate-300 dark:group-hover:text-foreground"
+                    )} 
+                    strokeWidth={isSettingsActive ? 2 : 1.5} 
+                  />
+                  Settings
+                </Link>
+                <Link
+                  href={`/${role}/help-support`}
+                  onClick={() => setIsOpen(false)}
+                  className={cn(
+                    "flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[13px] font-medium transition-all duration-200 mb-2",
+                    isHelpActive 
+                      ? "bg-white/10 text-white dark:bg-primary/10 dark:text-foreground shadow-[inset_2px_0_0_0_#D4A72C]" 
+                      : "text-slate-300 dark:text-muted-foreground hover:bg-white/5 dark:hover:bg-muted/50 hover:text-white dark:hover:text-foreground"
+                  )}
+                >
+                  <MessageSquare 
+                    className={cn(
+                      "h-[18px] w-[18px] transition-all duration-300", 
+                      isHelpActive 
+                        ? "text-[#D4A72C] drop-shadow-[0_0_8px_rgba(212,167,44,0.5)] scale-110" 
+                        : "text-slate-400 dark:text-muted-foreground group-hover:text-slate-300 dark:group-hover:text-foreground"
+                    )} 
+                    strokeWidth={isHelpActive ? 2 : 1.5} 
+                  />
+                  Help & Support
+                </Link>
+              </>
+            );
+          })()}
 
           <div className="flex items-center gap-3 bg-white/5 p-3 rounded-[12px] border border-white/10 mt-2">
             <Avatar className="h-10 w-10 border border-[#D4A72C]/30 bg-[#0A1118]">

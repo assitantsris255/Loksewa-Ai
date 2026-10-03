@@ -4,8 +4,13 @@ import { QuestionData, PaginatedResponse } from './teacher-questions';
 export interface AdminQuestion {
   id: number;
   question_id: string;
+  course_id?: number | null;
+  course_title?: string | null;
+  mapping_status?: 'mapped' | 'incomplete' | 'unassigned' | 'invalid';
+  mapping_status_display?: string;
   topic_name: string;
   subject_name: string;
+  chapter_name?: string;
   position_name: string;
   question_type: string;
   status: string;
@@ -83,6 +88,11 @@ export interface QuestionStats {
   subjective: number;
   active: number;
   ai_pending: number;
+  mapped?: number;
+  needs_mapping?: number;
+  incomplete?: number;
+  unassigned?: number;
+  invalid?: number;
 }
 
 export const adminQuestionApi = {
@@ -102,9 +112,27 @@ export const adminQuestionApi = {
   // Note: the DRF @action for this is named bulk_action with no custom
   // url_path, so its real URL keeps the underscore - it does NOT become
   // bulk-action the way most routes do.
-  bulkAction: async (action: string, ids: number[], collectionIds?: number[], tagIds?: number[]) => apiClient<{ error?: string, count: number }>(`/admin/questions/bulk_action/`, {
+  bulkAction: async (
+    action: string,
+    ids: number[],
+    collectionIds?: number[],
+    tagIds?: number[],
+    academicMapping?: {
+      course_id?: number;
+      exam_id?: number;
+      subject_id?: number;
+      chapter_id?: number;
+      topic_id?: number;
+    }
+  ) => apiClient<{ error?: string, count: number, message?: string }>(`/admin/questions/bulk_action/`, {
     method: 'POST',
-    body: JSON.stringify({ action, ids, collection_ids: collectionIds, tag_ids: tagIds }),
+    body: JSON.stringify({
+      action,
+      ids,
+      collection_ids: collectionIds,
+      tag_ids: tagIds,
+      ...(academicMapping || {})
+    }),
   }),
   uploadCSV: async (file: File, target: ImportTarget) => {
     const formData = new FormData();

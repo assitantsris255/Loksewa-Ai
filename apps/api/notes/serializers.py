@@ -27,6 +27,7 @@ class StudyMaterialListSerializer(serializers.ModelSerializer):
     chapter_name = serializers.CharField(source='chapter.title', read_only=True, default=None)
     topic_name = serializers.CharField(source='topic.name', read_only=True, default=None)
     course_title = serializers.CharField(source='course.title', read_only=True, default=None)
+    file = serializers.SerializerMethodField()
     file_url = serializers.SerializerMethodField()
     is_bookmarked = serializers.SerializerMethodField()
     progress = serializers.SerializerMethodField()
@@ -49,10 +50,14 @@ class StudyMaterialListSerializer(serializers.ModelSerializer):
     def get_file_url(self, obj):
         if obj.file:
             request = self.context.get('request')
+            download_path = f"/api/notes/materials/{obj.id}/download/"
             if request:
-                return request.build_absolute_uri(obj.file.url)
-            return obj.file.url
+                return request.build_absolute_uri(download_path)
+            return download_path
         return None
+
+    def get_file(self, obj):
+        return self.get_file_url(obj)
 
     def get_is_bookmarked(self, obj):
         if hasattr(obj, '_is_bookmarked'):

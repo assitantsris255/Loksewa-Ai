@@ -11,6 +11,9 @@ from django.utils import timezone
 from .models import Enrollment
 
 
+from .services.course_access_service import CourseAccessService
+
+
 def active_enrollments(user):
     """The student's enrollments that currently grant access."""
     now = timezone.now()
@@ -26,146 +29,25 @@ def course_access_denial(user, course_id):
     Not being enrolled and not existing look the same (403): a student can't
     probe which course ids exist.
     """
-    if authorized_courses(user).filter(id=course_id).exists():
+    if CourseAccessService.has_course_access(user, course_id):
         return None
     return 403, 'You are not enrolled in this course.'
 
 
-STAFF_ROLES = ('teacher', 'admin', 'super-admin')
+STAFF_ROLES = CourseAccessService.STAFF_ROLES
 
 
 def authorized_exam_ids(user, exams=None):
     """The exams `user` may practise - the single answer to "which exams does
-    this student's purchase cover?".
-
-    Returns None for staff (unrestricted), otherwise a set of Exam ids, all of
-    them published (Exam.status == 'active'; Coming Soon and inactive exams
-    are never practisable). An exam is authorised when it is - or sits under -
-    the exam of:
-
-      * a course the student has a live Enrollment in, while that course is
-        published. Enrollments are what an approved payment creates for every
-        package type that names courses (SINGLE, MULTI via the student's
-        selection, BUNDLE); a pending or rejected payment creates none, and
-        the enrollment expires with the subscription;
-      * any published course, if the student holds an active ALL_ACCESS
-        subscription (that package type names no courses - it means all);
-      * the student's profile target position - but only where no purchase
-        model applies: while package enforcement is OFF, or for accounts an
-        admin granted access to directly (those have no payment/enrollment).
-        A self-registered student's target is what they *intend* to buy, not
-        something they own, so with enforcement ON it grants nothing.
-
-    `exams` may carry the active exam rows (objects with id / parent_id / status)
-    the caller has already loaded, saving one query.
-
-    Computed from the database on every call - nothing is cached or
-    remembered, so a change to an enrollment, subscription or exam takes
-    effect on the very next request.
-    """
-    if user.role in STAFF_ROLES:
-        return None
-    from django.db.models import Exists
-
-    from core.models import AdminSettings
-    from exams.models import Exam
-    from subscriptions.access import has_admin_granted_access
-    from subscriptions.models import Subscription
-    from .models import Course
-
-    now = timezone.now()
-    enrolled = active_enrollments(user).filter(
-        course__status='published', course__exam_id__isnull=False
-    ).values_list('course__exam_id', flat=True)
-    all_access = Subscription.objects.filter(
-        student=user, status='ACTIVE', expiry_date__gt=now, plan__package_type='ALL_ACCESS'
-    )
-    everything = Course.objects.filter(
-        status='published', exam_id__isnull=False
-    ).filter(Exists(all_access)).values_list('exam_id', flat=True)
-    roots = set(enrolled.union(everything))
-
-    if not AdminSettings.is_subscription_enforced() or has_admin_granted_access(user):
-        try:
-            target = user.student_profile.target_position_id
-        except Exception:  # no profile
-            target = None
-        if target:
-            roots.add(target)
-
-    # An exam can be a level node with services underneath it; owning the
-    # parent covers its children. One read of the (small) exam tree.
-    if exams is None:
-        rows = list(Exam.objects.filter(is_active=True).values_list('id', 'parent_id', 'status'))
-    else:
-        rows = [(e.id, e.parent_id, e.status) for e in exams]
-    children = {}
-    for exam_id, parent_id, _status in rows:
-        children.setdefault(parent_id, []).append(exam_id)
-    status_of = {exam_id: status for exam_id, _p, status in rows}
-    covered, stack = set(), [r for r in roots if r in status_of]
-    while stack:
-        node = stack.pop()
-        if node in covered:
-            continue
-        covered.add(node)
-        stack.extend(children.get(node, []))
-    return {i for i in covered if status_of.get(i) == 'active'}
+    this student's purchase cover?". Delegated to CourseAccessService."""
+    return CourseAccessService.get_accessible_exam_ids(user, exams=exams)
 
 
 def authorized_courses(user):
     """The authoritative QuerySet of Course objects `user` is authorized to access.
+    Delegated to CourseAccessService."""
+    return CourseAccessService.get_accessible_courses(user)
 
-    Rules:
-    - Staff (teacher/admin/super-admin): all published courses.
-    - Students with active ALL_ACCESS subscription: all published courses.
-    - Students with active Enrollments: published courses with active unexpired enrollment.
-    - Admin granted access: StudentProfile.target_course (if published) or enrolled courses.
-    - Non-published courses (draft, coming_soon, archived) are NEVER returned.
-    """
-    from .models import Course
-
-    if not user or not user.is_authenticated:
-        return Course.objects.none()
-
-    if user.role in STAFF_ROLES:
-        return Course.objects.filter(status='published')
-
-    from core.models import AdminSettings
-    from subscriptions.access import has_admin_granted_access
-    from subscriptions.models import Subscription
-
-    now = timezone.now()
-
-    # Check if student has active ALL_ACCESS subscription
-    has_all_access = Subscription.objects.filter(
-        student=user, status='ACTIVE', expiry_date__gt=now, plan__package_type='ALL_ACCESS'
-    ).exists()
-    if has_all_access:
-        return Course.objects.filter(status='published')
-
-    # Enrolled courses
-    enrolled_course_ids = set(
-        active_enrollments(user).filter(course__status='published').values_list('course_id', flat=True)
-    )
-
-    # Admin granted access fallback if applicable
-    if not AdminSettings.is_subscription_enforced() or has_admin_granted_access(user):
-        try:
-            profile = getattr(user, 'student_profile', None)
-            if profile:
-                if profile.target_course_id:
-                    enrolled_course_ids.add(profile.target_course_id)
-                elif profile.target_position_id:
-                    target_exam_course_ids = Course.objects.filter(
-                        exam_id=profile.target_position_id,
-                        status='published'
-                    ).values_list('id', flat=True)
-                    enrolled_course_ids.update(target_exam_course_ids)
-        except Exception:
-            pass
-
-    return Course.objects.filter(id__in=enrolled_course_ids, status='published')
 
 
 def invalidate_student_course_context(user_id):
@@ -175,6 +57,7 @@ def invalidate_student_course_context(user_id):
     from django.core.cache import cache
     try:
         cache.delete(f'student_course_ctx:{user_id}')
+        cache.delete(f'pkg_status:{user_id}')
     except Exception:
         pass
 
@@ -376,7 +259,8 @@ def get_authorized_examination_filter(user, target_course=None):
     auth_course_ids = list(auth_courses.values_list('id', flat=True))
     auth_exam_scope = authorized_exam_ids(user) or set()
     q = Q(course_id__in=auth_course_ids)
-    q |= Q(course__isnull=True, status__in=['published', 'live'])
+    # Truly global platform exams (course is null, exam is null)
+    q |= Q(course__isnull=True, exam__isnull=True, status__in=['published', 'live'])
     if auth_exam_scope:
         q |= Q(course__isnull=True, exam_id__in=auth_exam_scope)
     return q
@@ -385,29 +269,8 @@ def get_authorized_examination_filter(user, target_course=None):
 def is_examination_authorized_for_student(user, examination):
     """
     Determines if student `user` is authorized to access `examination` (detail, start, attempt, result).
-    Returns True/False.
+    Delegates to CourseAccessService.has_examination_access.
     """
-    if not user or not user.is_authenticated:
-        return False
-    if user.role in STAFF_ROLES:
-        return True
-    if user.role != 'student':
-        return False
+    return CourseAccessService.has_examination_access(user, examination)
 
-    auth_courses = authorized_courses(user)
-    if not auth_courses.exists():
-        # Global, course-less published/live exams are open to the student base.
-        return bool(examination.status in ('published', 'live') and examination.course_id is None)
-
-    # If exam is explicitly tied to a course, user must be enrolled/authorized in that course
-    if examination.course_id:
-        return auth_courses.filter(id=examination.course_id).exists()
-
-    # If exam is not explicitly tied to a course, check exam taxonomy scope
-    if examination.exam_id:
-        scope = authorized_exam_ids(user)
-        return bool(scope and examination.exam_id in scope)
-
-    # Exam has neither course nor exam taxonomy - unauthorized
-    return False
 

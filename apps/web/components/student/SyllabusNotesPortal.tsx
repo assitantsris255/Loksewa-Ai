@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
   BookOpen, FileText, Download, Eye, Sparkles,
-  Search, Filter, ChevronRight, Layers, CheckCircle2,
+  Search, ChevronRight, Layers,
   ExternalLink, X, Maximize2, Minimize2, Clock, AlertCircle, RefreshCw, Loader2
 } from "lucide-react";
 import { notesApi, StudyMaterial } from "@/lib/api/notes";
@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { toast } from "react-hot-toast";
 
 import { useOptionalStudentContext } from "@/contexts/StudentContext";
 
@@ -80,6 +81,34 @@ export default function SyllabusNotesPortal({
   // PDF Viewer Modal state
   const [viewingMaterial, setViewingMaterial] = useState<StudyMaterial | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [loadingPdf, setLoadingPdf] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    if (viewingMaterial && (viewingMaterial.file_url || viewingMaterial.file)) {
+      setLoadingPdf(true);
+      notesApi.getMaterialBlobUrl(viewingMaterial.id)
+        .then(url => {
+          if (active) setPdfBlobUrl(url);
+        })
+        .catch(err => {
+          console.error('Failed to load protected PDF', err);
+          if (active) setPdfBlobUrl(null);
+        })
+        .finally(() => {
+          if (active) setLoadingPdf(false);
+        });
+    } else {
+      setPdfBlobUrl(null);
+    }
+    return () => {
+      active = false;
+      if (pdfBlobUrl) {
+        URL.revokeObjectURL(pdfBlobUrl);
+      }
+    };
+  }, [viewingMaterial]);
 
   const handlePrepChange = (prepId: number) => {
     // Just switches the query key - React Query serves cached data
@@ -493,7 +522,6 @@ export default function SyllabusNotesPortal({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredMaterials.map((material) => {
             const hasPdf = Boolean(material.file_url || material.file);
-            const fileUrl = material.file_url || material.file;
 
             return (
               <div
@@ -580,17 +608,23 @@ export default function SyllabusNotesPortal({
                         <Eye className="w-3.5 h-3.5" /> View PDF
                       </Button>
 
-                      {fileUrl && (
-                        <a
-                          href={fileUrl}
-                          download
-                          target="_blank"
-                          rel="noreferrer"
+                      {hasPdf && (
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              await notesApi.downloadMaterial(material.id, `${material.slug || 'note'}.pdf`);
+                              toast.success('Download started');
+                            } catch (err: any) {
+                              toast.error(err?.data?.detail || 'Download not authorized or unavailable.');
+                            }
+                          }}
                           className="inline-flex items-center justify-center h-8 px-3 rounded-lg border border-border bg-card text-foreground hover:bg-muted text-xs font-semibold transition-colors"
                           title="Download PDF"
                         >
                           <Download className="w-3.5 h-3.5" />
-                        </a>
+                        </button>
                       )}
                     </>
                   ) : (
@@ -648,23 +682,28 @@ export default function SyllabusNotesPortal({
               </div>
 
               {/* Header Actions */}
-              <div className="flex items-center gap-2 shrink-0 z-10">
+              <div className="flex items-center gap-1.5 shrink-0 z-10">
                 {(viewingMaterial.file_url || viewingMaterial.file) && (
-                  <a
-                    href={viewingMaterial.file_url || viewingMaterial.file}
-                    download
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await notesApi.downloadMaterial(viewingMaterial.id, `${viewingMaterial.slug || 'note'}.pdf`);
+                        toast.success('Download started');
+                      } catch (err: any) {
+                        toast.error(err?.data?.detail || 'Download not authorized or unavailable.');
+                      }
+                    }}
                     className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-semibold text-white transition-colors"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">Download</span>
-                  </a>
+                  </button>
                 )}
 
-                {(viewingMaterial.file_url || viewingMaterial.file) && (
+                {pdfBlobUrl && (
                   <a
-                    href={viewingMaterial.file_url || viewingMaterial.file}
+                    href={pdfBlobUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="p-1.5 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors"
@@ -697,9 +736,14 @@ export default function SyllabusNotesPortal({
 
             {/* Modal Body / PDF Viewer */}
             <div className="flex-1 bg-slate-100 dark:bg-slate-950 relative overflow-hidden">
-              {(viewingMaterial.file_url || viewingMaterial.file) ? (
+              {loadingPdf ? (
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8">
+                  <div className="w-8 h-8 border-2 border-[#D4A72C] border-t-transparent rounded-full animate-spin mb-3" />
+                  <p className="text-sm font-medium">Securing and loading document...</p>
+                </div>
+              ) : pdfBlobUrl ? (
                 <iframe
-                  src={`${viewingMaterial.file_url || viewingMaterial.file}#view=FitH`}
+                  src={`${pdfBlobUrl}#view=FitH`}
                   className="w-full h-full border-0"
                   title={viewingMaterial.title}
                 />
